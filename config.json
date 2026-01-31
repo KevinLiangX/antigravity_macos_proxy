@@ -1,0 +1,26 @@
+{
+    "log_level": "debug",
+    "proxy": {
+        "host": "127.0.0.1",
+        "port": 7897,
+        "type": "socks5"
+    },
+    "fake_ip": {
+        "enabled": true,
+        "cidr": "198.18.0.0/15"
+    },
+    "timeout": {
+        "connect": 1000,
+        "send": 1000,
+        "recv": 1000
+    },
+    "proxy_rules": {
+    "allowed_ports": [80, 443, 8080],
+    "dns_mode": "direct",
+    "ipv6_mode": "proxy",
+    "udp_mode": "block"
+   },
+   "traffic_logging": false,
+   "child_injection": true,
+   "target_processes": [] 
+}
