@@ -146,7 +146,10 @@ xcodebuild -project AntigravityTun.xcodeproj -scheme AntigravityTun -configurati
 cp proxy_config.json.example config.json
 vim config.json
 
-# 2. 启动应用
+# 2. 重新解锁（会把 lib/config 写入 app 包并写入 LSEnvironment，保证重启后也生效）
+./robust_unlock.sh
+
+# 3. 启动应用
 ./run_unlocked.sh
 ```
 *   **注意**: 过程中可能会弹出“是否允许访问钥匙串”或要求输入密码，请输入当前用户登录密码以授权重签名。
@@ -155,21 +158,24 @@ vim config.json
 
 ## 7.1 创建配置文件
 
-在以下任一位置创建 `proxy_config.json` 配置文件：
+在以下任一位置创建配置文件（`config.json` 或 `proxy_config.json` 均可）：
 
 - `~/.config/antigravity/config.json` （推荐）
+- `~/.config/antigravity/proxy_config.json`
 - `./config.json` （当前目录）
+- `./proxy_config.json`
 - `/tmp/config.json`
+- `/tmp/proxy_config.json`
 - 或通过环境变量 `ANTIGRAVITY_CONFIG` 指定路径
 
 ## 7.2 配置文件示例
 
 ```json
 {
-  "log_level": "info",
+  "log_level": "warn",
   "proxy": {
     "host": "127.0.0.1",
-    "port": 7890,
+    "port": 7897,
     "type": "socks5"
   },
   "fake_ip": {
@@ -177,9 +183,9 @@ vim config.json
     "cidr": "198.18.0.0/15"
   },
   "timeout": {
-    "connect": 5000,
-    "send": 5000,
-    "recv": 5000
+    "connect": 1000,
+    "send": 3000,
+    "recv": 8000
   },
   "proxy_rules": {
     "allowed_ports": [80, 443, 8080],
@@ -200,7 +206,7 @@ vim config.json
 | 参数   | 类型   | 默认值        | 说明                          |
 | ------ | ------ | ------------- | ----------------------------- |
 | `host` | string | `"127.0.0.1"` | SOCKS5 代理服务器地址         |
-| `port` | number | `7890`        | SOCKS5 代理服务器端口         |
+| `port` | number | `7897`        | SOCKS5 代理服务器端口         |
 | `type` | string | `"socks5"`    | 代理类型（目前仅支持 socks5） |
 
 **修改代理地址和端口示例：**
@@ -226,9 +232,9 @@ vim config.json
 
 | 参数      | 类型   | 默认值 | 说明                 |
 | --------- | ------ | ------ | -------------------- |
-| `connect` | number | `5000` | 连接超时时间（毫秒） |
-| `send`    | number | `5000` | 发送超时时间（毫秒） |
-| `recv`    | number | `5000` | 接收超时时间（毫秒） |
+| `connect` | number | `1000` | 连接超时时间（毫秒） |
+| `send`    | number | `3000` | 发送超时时间（毫秒） |
+| `recv`    | number | `8000` | 接收超时时间（毫秒） |
 
 ### proxy_rules（代理规则）
 
@@ -243,10 +249,18 @@ vim config.json
 
 | 参数               | 类型    | 默认值   | 说明                               |
 | ------------------ | ------- | -------- | ---------------------------------- |
-| `log_level`        | string  | `"info"` | 日志级别（debug/info/warn/error）  |
+| `log_level`        | string  | `"warn"` | 日志级别（debug/info/warn/error）  |
 | `traffic_logging`  | boolean | `false`  | 是否记录流量日志                   |
 | `child_injection`  | boolean | `true`   | 是否注入子进程                     |
 | `target_processes` | array   | `[]`     | 目标进程列表（空数组表示所有进程） |
+
+#### 文件日志（排障用）
+
+- 默认不落盘日志（性能优先）。子进程（例如 `language_server_macos_arm`）的 stderr 常被 Electron 管道接走，因此终端不一定看得到完整日志。
+- 需要落盘时，启动前设置环境变量：
+  - `ANTIGRAVITY_LOG_FILE=1`
+- 开启后会生成：
+  - `/tmp/antigravity_proxy.<PID>.log`（每个进程一个文件）
 
 **只对特定进程生效示例：**
 
@@ -258,34 +272,77 @@ vim config.json
 
 # 8. 故障排查 (Troubleshooting)
 
-## 8.1 常见问题
+排查原则：先确认 SOCKS 端口可用 -> 再确认注入生效 -> 再看 FakeIP/隧道 -> 最后定位断流原因。
 
-### 1. 动态库未加载
+## 8.1 快速检查（1 分钟）
 
-**问题**：程序运行但没有通过代理
+1) 确认 Clash/Mihomo SOCKS 端口监听（默认 7897）
+```bash
+lsof -nP -iTCP:7897 -sTCP:LISTEN
+```
 
-**解决方案**：
-- 检查 `DYLD_INSERT_LIBRARIES` 环境变量是否正确设置
-- 确认动态库文件路径正确
-- 查看日志文件确认是否有加载信息
+2) 确认 IPv6 loopback 可连（如果进程使用 IPv6 socket，会连接 ::1）
+```bash
+nc -vz ::1 7897
+```
 
-### 2. 无法连接到代理
+3) 确认解锁包写入了 restart-safe 注入环境
+```bash
+/usr/libexec/PlistBuddy -c "Print :LSEnvironment" "Antigravity_Unlocked.app/Contents/Info.plist"
+```
 
-**问题**：日志显示 "Failed to connect to proxy"
+## 8.2 确认注入是否生效（关键）
 
-**解决方案**：
-- 确认 SOCKS5 代理服务器正在运行
-- 检查配置文件中的 `host` 和 `port` 是否正确
-- 测试代理连接：`nc -zv 127.0.0.1 7890`
+1) 找到语言服务进程（通常是实际发请求的进程）
+```bash
+pgrep -fl language_server_macos_arm
+```
 
-### 3. 配置文件未生效
+2) 确认 dylib 已加载
+```bash
+vmmap <PID> | rg "libAntigravityTun\.dylib" || echo "NO_DYLIB"
+```
 
-**问题**：修改配置后没有变化
+3) 确认该进程确实连到了本地 SOCKS
+```bash
+lsof -nP -p <PID> -a -iTCP | rg "7897" || echo "NO_SOCKS_CONN"
+```
 
-**解决方案**：
-- 确认配置文件路径正确
-- 检查 JSON 格式是否正确（使用 `jsonlint` 验证）
-- 查看日志确认配置是否被加载
+## 8.3 /tmp 目录里的文件说明
+
+- `/tmp/antigravity_fakeip_map_<uid>.bin`（如 `_501.bin`）
+  - 用于多进程共享 FakeIP <-> 域名映射（命中 FakeIP 后反查域名做 SOCKS5 CONNECT）。
+  - 如果系统共享内存不可用，会回退到该文件（属于正常机制）。
+  - 可删除；下次运行会自动重新生成（不建议运行中频繁删除）。
+
+- `/tmp/antigravity_proxy.<PID>.log`
+  - 仅当设置 `ANTIGRAVITY_LOG_FILE=1` 时生成（排障用）。
+  - 建议同时把配置 `log_level` 临时改为 `debug`，用完再改回 `warn`。
+
+## 8.4 常见错误分流
+
+### 1) `connect: invalid argument` / `EINVAL`
+含义：connect 阶段失败（常见于非阻塞连接等待或地址族不匹配）。
+
+建议：
+- 确认使用的是最新 dylib（重新编译 + 复制进 app bundle + 重启）。
+- 开启 debug + file log 后查看是否出现 `poll failed` / `so_error` / `Async connect timeout`。
+
+### 2) `unexpected EOF`（流式中途断开）
+含义：隧道通常已建立，但流式读取过程中对端或链路中途关闭连接。
+
+建议：
+- 开启 debug + file log 后看连接追踪信息：
+  - `recv=0 (peer FIN)`：对端优雅关闭（更偏服务端/中间层策略）
+  - `ECONNRESET`：链路被 reset（更偏节点质量/中间设备）
+  - `close() by local`：本进程主动结束（更偏上层超时/重试）
+- 同一时间对照 Clash 日志是否发生节点切换/重载配置。
+
+## 8.5 性能慢（首包慢/吞吐低）
+
+- 确保 `log_level` 为 `warn`（debug 会明显拖慢）。
+- 默认不要开 `ANTIGRAVITY_LOG_FILE`（落盘 I/O 会放大性能损耗）。
+- 如仍慢：适当增大 `timeout.recv`（例如 8000~15000ms）以减少抖动导致的重试。
 
 
 # 9. 贡献

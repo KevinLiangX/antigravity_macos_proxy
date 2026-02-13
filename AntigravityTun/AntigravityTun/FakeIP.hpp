@@ -4,6 +4,7 @@
 #include "Logger.hpp"
 #include <arpa/inet.h>
 #include <cstring>
+#include <errno.h>
 #include <fcntl.h>
 #include <mutex>
 #include <semaphore.h>
@@ -34,6 +35,8 @@ class FakeIP {
   static constexpr size_t kSharedDomainMax = 255;
   static constexpr const char *kSharedMapName = "/antigravity_fakeip_map";
   static constexpr const char *kSharedSemName = "/antigravity_fakeip_sem";
+  static constexpr const char *kSharedMapFallbackPrefix =
+      "/tmp/antigravity_fakeip_map_";
 
   struct SharedEntry {
     uint32_t ip;   // 主机字节序
@@ -72,29 +75,102 @@ class FakeIP {
 
   void EnsureSharedInitialized() {
     std::call_once(m_sharedOnce, [this]() {
+      auto fallbackPath = []() {
+        return std::string(kSharedMapFallbackPrefix) +
+               std::to_string(getuid()) + ".bin";
+      };
+
+      auto openFallbackFile = [&]() {
+        std::string path = fallbackPath();
+        int fd = open(path.c_str(), O_CREAT | O_RDWR, 0666);
+        if (fd == -1) {
+          Core::Logger::Error("FakeIP: fallback open failed: " +
+                              std::string(strerror(errno)));
+        } else {
+          Core::Logger::Warn("FakeIP: using fallback shared map file: " + path);
+        }
+        return fd;
+      };
+
       // 初始化信号量
       m_sem = sem_open(kSharedSemName, O_CREAT, 0666, 1);
       if (m_sem == SEM_FAILED) {
-        Core::Logger::Error("FakeIP: sem_open failed");
+        Core::Logger::Error("FakeIP: sem_open failed: " +
+                            std::string(strerror(errno)));
         return;
       }
 
       LockShared();
 
       // 初始化共享内存
+      bool usingShm = true;
       int fd = shm_open(kSharedMapName, O_CREAT | O_RDWR, 0666);
       if (fd == -1) {
-        Core::Logger::Error("FakeIP: shm_open failed");
+        Core::Logger::Warn("FakeIP: shm_open failed, fallback to file: " +
+                           std::string(strerror(errno)));
+        fd = openFallbackFile();
+        usingShm = false;
+        if (fd == -1) {
+          UnlockShared();
+          return;
+        }
+      }
+
+      // 仅在 size 不足时扩容，避免对已有对象重复 ftruncate 触发错误
+      struct stat st;
+      if (fstat(fd, &st) == -1) {
+        Core::Logger::Error("FakeIP: fstat failed: " +
+                            std::string(strerror(errno)));
+        close(fd);
         UnlockShared();
         return;
       }
 
-      // 设置大小
-      if (ftruncate(fd, sizeof(SharedTable)) == -1) {
-        Core::Logger::Error("FakeIP: ftruncate failed");
+      if (st.st_size < (off_t)sizeof(SharedTable)) {
+        if (ftruncate(fd, sizeof(SharedTable)) == -1) {
+          if (usingShm) {
+            Core::Logger::Warn("FakeIP: ftruncate on shm failed, fallback to "
+                               "file: " +
+                               std::string(strerror(errno)));
+            close(fd);
+            fd = openFallbackFile();
+            usingShm = false;
+            if (fd == -1) {
+              UnlockShared();
+              return;
+            }
+            if (ftruncate(fd, sizeof(SharedTable)) == -1) {
+              Core::Logger::Error("FakeIP: fallback ftruncate failed: " +
+                                  std::string(strerror(errno)));
+              close(fd);
+              UnlockShared();
+              return;
+            }
+          } else {
+            Core::Logger::Error("FakeIP: ftruncate failed: " +
+                                std::string(strerror(errno)));
+            close(fd);
+            UnlockShared();
+            return;
+          }
+        }
+      } else if (st.st_size != (off_t)sizeof(SharedTable) && usingShm) {
+        // shm 已存在且尺寸异常，切到 file-backed，避免 mmap size 风险
+        Core::Logger::Warn("FakeIP: unexpected shm size, fallback to file");
         close(fd);
-        UnlockShared();
-        return;
+        fd = openFallbackFile();
+        usingShm = false;
+        if (fd == -1) {
+          UnlockShared();
+          return;
+        }
+        if (ftruncate(fd, sizeof(SharedTable)) == -1) {
+          Core::Logger::Error("FakeIP: fallback ftruncate failed: " +
+                              std::string(strerror(errno)));
+          close(fd);
+          UnlockShared();
+          return;
+        }
       }
 
       void *ptr = mmap(NULL, sizeof(SharedTable), PROT_READ | PROT_WRITE,

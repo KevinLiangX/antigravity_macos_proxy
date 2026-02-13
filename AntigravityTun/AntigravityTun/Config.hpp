@@ -3,7 +3,11 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <limits.h>
+#include <mach-o/dyld.h>
 #include <pwd.h>
+#include <sstream>
+#include <stdlib.h>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -44,6 +48,34 @@ struct ProxyRules {
 
 class Config {
 private:
+  static std::string GetExecutableDir() {
+    char pathBuf[PATH_MAX];
+    uint32_t pathSize = sizeof(pathBuf);
+    if (_NSGetExecutablePath(pathBuf, &pathSize) != 0)
+      return "";
+
+    char resolvedBuf[PATH_MAX];
+    if (!realpath(pathBuf, resolvedBuf))
+      return "";
+
+    std::string fullPath = resolvedBuf;
+    size_t slash = fullPath.find_last_of('/');
+    if (slash == std::string::npos)
+      return "";
+    return fullPath.substr(0, slash);
+  }
+
+  static std::string ExpandSpecialPath(const std::string &path) {
+    static const std::string kExecutablePrefix = "@executable_path/";
+    if (path.rfind(kExecutablePrefix, 0) == 0) {
+      std::string executableDir = GetExecutableDir();
+      if (!executableDir.empty()) {
+        return executableDir + "/" + path.substr(kExecutablePrefix.size());
+      }
+    }
+    return path;
+  }
+
   static std::string GetHomeDir() {
     const char *home = getenv("HOME");
     if (home)
@@ -87,27 +119,42 @@ public:
   }
 
   bool Load(const std::string &path = "") {
-    std::string configPath = path;
+    std::string configPath = ExpandSpecialPath(path);
+    std::string home = GetHomeDir();
 
     // 默认配置文件路径查找
     if (configPath.empty()) {
       const char *envPath = getenv("ANTIGRAVITY_CONFIG");
       if (envPath) {
-        configPath = envPath;
-      } else {
-        std::string home = GetHomeDir();
-        if (!home.empty()) {
-          configPath = home + "/.config/antigravity/proxy_config.json";
-        }
+        configPath = ExpandSpecialPath(envPath);
       }
     }
 
     // 候选配置文件路径
     std::vector<std::string> candidates;
-    if (!configPath.empty())
-      candidates.push_back(configPath);
-    candidates.push_back("proxy_config.json");
-    candidates.push_back("/tmp/proxy_config.json");
+    auto AddCandidate = [&candidates](const std::string &p) {
+      if (p.empty())
+        return;
+      if (std::find(candidates.begin(), candidates.end(), p) ==
+          candidates.end()) {
+        candidates.push_back(p);
+      }
+    };
+
+    AddCandidate(configPath);
+    std::string executableDir = GetExecutableDir();
+    if (!executableDir.empty()) {
+      AddCandidate(executableDir + "/../Resources/proxy_config.json");
+      AddCandidate(executableDir + "/../Resources/config.json");
+    }
+    if (!home.empty()) {
+      AddCandidate(home + "/.config/antigravity/config.json");
+      AddCandidate(home + "/.config/antigravity/proxy_config.json");
+    }
+    AddCandidate("config.json");
+    AddCandidate("proxy_config.json");
+    AddCandidate("/tmp/config.json");
+    AddCandidate("/tmp/proxy_config.json");
 
     std::ifstream f;
     std::string loadedPath;
@@ -121,8 +168,13 @@ public:
     }
 
     if (!f.is_open()) {
-      Logger::Warn("Failed to open config file. Tried paths like: " +
-                   (!candidates.empty() ? candidates[0] : "none"));
+      std::ostringstream oss;
+      for (size_t i = 0; i < candidates.size(); ++i) {
+        if (i)
+          oss << ", ";
+        oss << candidates[i];
+      }
+      Logger::Warn("Failed to open config file. Tried: " + oss.str());
       return false;
     }
 

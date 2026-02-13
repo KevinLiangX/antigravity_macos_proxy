@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <ctime>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <unistd.h>
 
@@ -9,26 +10,104 @@ namespace Core {
 enum class LogLevel { Debug, Info, Warn, Error };
 
 class Logger {
+private:
+  static FILE *s_file;
+  static std::mutex s_mtx;
+  static LogLevel s_level;           // 当前日志级别
+  static bool s_fileLoggingEnabled;  // 是否启用文件日志（默认false提升性能）
+
+  static int LevelToInt(LogLevel level) {
+    switch (level) {
+    case LogLevel::Debug: return 0;
+    case LogLevel::Info:  return 1;
+    case LogLevel::Warn:  return 2;
+    case LogLevel::Error: return 3;
+    default: return 4;
+    }
+  }
+
 public:
   static void Init(const std::string &path = "") {
-    // 暂时不实现，避免静态文件问题
+    std::lock_guard<std::mutex> lock(s_mtx);
+    if (s_file != nullptr)
+      return; // 已初始化
+
+    // 默认情况下不启用文件日志，仅输出到 stderr
+    // 如需文件日志，通过环境变量 ANTIGRAVITY_LOG_FILE=1 开启
+    const char *envFile = getenv("ANTIGRAVITY_LOG_FILE");
+    s_fileLoggingEnabled = (envFile && (envFile[0] == '1' || envFile[0] == 't' || envFile[0] == 'T'));
+
+    if (!s_fileLoggingEnabled) {
+      return; // 不启用文件日志，提升性能
+    }
+
+    std::string logPath = path;
+    if (logPath.empty()) {
+      // 默认路径，带上 pid 避免多进程冲突
+      char buf[256];
+      snprintf(buf, sizeof(buf), "/tmp/antigravity_proxy.%d.log", getpid());
+      logPath = buf;
+    }
+    
+    // 以追加模式打开
+    s_file = fopen(logPath.c_str(), "a");
+    if (s_file != nullptr) {
+      // 设置行缓冲
+      setvbuf(s_file, nullptr, _IOLBF, 0);
+    }
   }
 
   static void SetLevelFromString(const std::string &levelStr) {
-    // 暂时忽略
+    std::string lower = levelStr;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    
+    if (lower == "debug") {
+      s_level = LogLevel::Debug;
+    } else if (lower == "info") {
+      s_level = LogLevel::Info;
+    } else if (lower == "warn" || lower == "warning") {
+      s_level = LogLevel::Warn;
+    } else if (lower == "error") {
+      s_level = LogLevel::Error;
+    } else {
+      s_level = LogLevel::Warn; // 默认 warn
+    }
   }
 
-  static bool IsEnabled(LogLevel level) { return true; }
+  static bool IsEnabled(LogLevel level) {
+    return LevelToInt(level) >= LevelToInt(s_level);
+  }
 
   static void Log(LogLevel level, const std::string &msg) {
+    // 快速路径：级别不够直接返回
+    if (!IsEnabled(level))
+      return;
+
     time_t now = time(nullptr);
     struct tm tstruct;
     char buf[80];
     localtime_r(&now, &tstruct);
     strftime(buf, sizeof(buf), "%Y-%m-%d %X", &tstruct);
 
-    fprintf(stderr, "[%s] [%d] %s %s\n", buf, getpid(), LevelToString(level),
-            msg.c_str());
+    const char *levelStr = LevelToString(level);
+    int pid = getpid();
+
+    // 输出到 stderr
+    fprintf(stderr, "[%s] [%d] %s %s\n", buf, pid, levelStr, msg.c_str());
+    
+    // 文件日志（如果启用）- 减少锁持有时间，先格式化字符串
+    if (s_fileLoggingEnabled && s_file != nullptr) {
+      char line[512];
+      int len = snprintf(line, sizeof(line), "[%s] [%d] %s %s\n", 
+                         buf, pid, levelStr, msg.c_str());
+      if (len > 0 && len < (int)sizeof(line)) {
+        std::lock_guard<std::mutex> lock(s_mtx);
+        if (s_file != nullptr) {
+          fwrite(line, 1, len, s_file);
+        }
+      }
+    }
   }
 
   static void Debug(const std::string &msg) { Log(LogLevel::Debug, msg); }
@@ -52,4 +131,11 @@ private:
     }
   }
 };
+
+// 静态成员定义
+FILE *Logger::s_file = nullptr;
+std::mutex Logger::s_mtx;
+LogLevel Logger::s_level = LogLevel::Warn;  // 默认 warn，减少日志开销
+bool Logger::s_fileLoggingEnabled = false;   // 默认关闭文件日志
+
 } // namespace Core

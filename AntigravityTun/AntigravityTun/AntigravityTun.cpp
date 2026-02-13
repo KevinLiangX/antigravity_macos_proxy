@@ -1,9 +1,15 @@
 #include <arpa/inet.h>
+#include <poll.h>
+#include <algorithm>
 #include <cerrno>
+#include <cctype>
 #include <cstring>
 #include <dlfcn.h>
 #include <iostream>
+#include <map>
+#include <mutex>
 #include <netinet/in.h>
+#include <string>
 #include <sys/socket.h>
 
 #include "Config.hpp"
@@ -11,6 +17,40 @@
 #include "Logger.hpp"
 #include "Socks5.hpp"
 #include "interpose.h"
+
+// 阶段5: 连接生命周期追踪（仅追踪被我们代理的 fd）
+namespace {
+struct TrackedConn {
+  std::string domain;
+  uint16_t port;
+  bool proxied; // 是否成功建立 SOCKS 隧道
+};
+std::map<int, TrackedConn> g_trackedFds;
+std::mutex g_trackMutex;
+
+// 添加追踪
+void TrackFd(int fd, const std::string &domain, uint16_t port) {
+  std::lock_guard<std::mutex> lock(g_trackMutex);
+  g_trackedFds[fd] = {domain, port, true};
+}
+
+// 移除追踪
+void UntrackFd(int fd) {
+  std::lock_guard<std::mutex> lock(g_trackMutex);
+  g_trackedFds.erase(fd);
+}
+
+// 检查是否被追踪
+bool IsTracked(int fd, TrackedConn *out = nullptr) {
+  std::lock_guard<std::mutex> lock(g_trackMutex);
+  auto it = g_trackedFds.find(fd);
+  if (it != g_trackedFds.end()) {
+    if (out) *out = it->second;
+    return true;
+  }
+  return false;
+}
+} // namespace
 
 int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
   if (!addr)
@@ -24,7 +64,7 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
   }();
   (void)init;
 
-  // 目前只处理 IPv4，因为 FakeIP 通常是 IPv4
+  // 目前只处理 IPv4 目标地址，因为 FakeIP 是 IPv4
   if (addr->sa_family == AF_INET) {
     const struct sockaddr_in *sin = (const struct sockaddr_in *)addr;
     uint32_t ip = sin->sin_addr.s_addr;
@@ -40,57 +80,91 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
 
         auto &config = Core::Config::Instance();
 
-        // 连接到代理服务器
-        struct sockaddr_in proxyAddr;
-        memset(&proxyAddr, 0, sizeof(proxyAddr));
-        proxyAddr.sin_family = AF_INET;
-        proxyAddr.sin_port = htons(config.proxy.port);
-        if (inet_pton(AF_INET, config.proxy.host.c_str(),
-                      &proxyAddr.sin_addr) != 1) {
-          Core::Logger::Error("Invalid Proxy IP");
-          errno = EINVAL;
-          return -1;
+        // 优化：用 getsockopt 判断 socket 类型，避免试错 connect
+        // 尝试获取 IPV6_V6ONLY 选项，如果成功说明是 IPv6 socket
+        int v6only = 0;
+        socklen_t optlen = sizeof(v6only);
+        bool isIpv6Socket = (getsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, &optlen) == 0);
+        
+        int res = -1;
+        int saved_errno = 0;
+        
+        if (isIpv6Socket) {
+          // IPv6 socket：直接使用 [::1]:port
+          struct sockaddr_in6 proxyAddr6;
+          memset(&proxyAddr6, 0, sizeof(proxyAddr6));
+          proxyAddr6.sin6_family = AF_INET6;
+          proxyAddr6.sin6_port = htons(config.proxy.port);
+          proxyAddr6.sin6_addr.s6_addr[15] = 0x01; // ::1
+          
+          Core::Logger::Debug("Connecting to [::1]:" + std::to_string(config.proxy.port));
+          res = connect(sockfd, (struct sockaddr *)&proxyAddr6, sizeof(proxyAddr6));
+          saved_errno = errno;
+        } else {
+          // IPv4 socket：使用 127.0.0.1:port
+          struct sockaddr_in proxyAddr;
+          memset(&proxyAddr, 0, sizeof(proxyAddr));
+          proxyAddr.sin_family = AF_INET;
+          proxyAddr.sin_port = htons(config.proxy.port);
+          if (inet_pton(AF_INET, config.proxy.host.c_str(), &proxyAddr.sin_addr) != 1) {
+            Core::Logger::Error("Invalid Proxy IP: " + config.proxy.host);
+            errno = EINVAL;
+            return -1;
+          }
+          Core::Logger::Debug("Connecting to " + config.proxy.host + ":" + 
+                             std::to_string(config.proxy.port));
+          res = connect(sockfd, (struct sockaddr *)&proxyAddr, sizeof(proxyAddr));
+          saved_errno = errno;
         }
-
-        // 调用原始 connect 连接到代理
-        int res =
-            connect(sockfd, (struct sockaddr *)&proxyAddr, sizeof(proxyAddr));
+        
+        if (res != 0 && saved_errno != EINPROGRESS) {
+          Core::Logger::Error("Connect failed, errno=" + std::to_string(saved_errno));
+        }
         if (res != 0) {
           if (errno == EINPROGRESS) {
              // 对于非阻塞 socket，我们需要等待连接完成
-             fd_set wset;
-             FD_ZERO(&wset);
-             FD_SET(sockfd, &wset);
-             struct timeval tv;
-             tv.tv_sec = config.timeout.connect_ms / 1000;
-             tv.tv_usec = (config.timeout.connect_ms % 1000) * 1000;
+             // 使用 poll 替代 select，避免 FD_SETSIZE 限制
+             struct pollfd pfd;
+             pfd.fd = sockfd;
+             pfd.events = POLLOUT;
+             pfd.revents = 0;
              
-             int sres = select(sockfd + 1, NULL, &wset, NULL, &tv);
-             if (sres > 0) {
-                // 连接可能有结果了，检查是否有错误
+             int timeoutMs = config.timeout.connect_ms;
+             int pollRes = -1;
+             
+             // 带 EINTR 重试的 poll
+             do {
+               pollRes = poll(&pfd, 1, timeoutMs);
+             } while (pollRes == -1 && errno == EINTR);
+             
+             if (pollRes > 0) {
+                // 检查是否有错误
                 int so_error;
                 socklen_t len = sizeof(so_error);
                 if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &so_error, &len) < 0) {
-                    Core::Logger::Error("getsockopt failed");
+                    Core::Logger::Error("getsockopt failed, fd=" + std::to_string(sockfd));
                     return -1;
                 }
                 if (so_error != 0) {
-                    Core::Logger::Error("Async connect failed: " + std::to_string(so_error));
+                    Core::Logger::Error("Async connect failed, fd=" + std::to_string(sockfd) + 
+                                        ", so_error=" + std::to_string(so_error));
                     errno = so_error;
                     return -1;
                 }
+                Core::Logger::Debug("Async connect succeeded via poll, fd=" + std::to_string(sockfd));
                 // 连接成功
-             } else if (sres == 0) {
-                 Core::Logger::Error("Async connect timeout");
+             } else if (pollRes == 0) {
+                 Core::Logger::Error("Async connect timeout, fd=" + std::to_string(sockfd));
                  errno = ETIMEDOUT;
                  return -1;
              } else {
-                 Core::Logger::Error("select failed");
+                 Core::Logger::Error("poll failed, fd=" + std::to_string(sockfd) + 
+                                     ", errno=" + std::to_string(errno));
                  return -1;
              }
           } else {
-              Core::Logger::Error("Failed to connect to proxy: " +
-                                  std::to_string(errno));
+              Core::Logger::Error("Failed to connect to proxy, fd=" + std::to_string(sockfd) + 
+                                  ", errno=" + std::to_string(errno));
               return -1;
           }
         }
@@ -112,10 +186,12 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         }
 
         if (handshakeSuccess) {
-          Core::Logger::Info("Hook: connect to FakeIP " + domain + " (Orig: " + domain + ")");
+          // 阶段5: 追踪成功建立隧道的连接
+          TrackFd(sockfd, domain, port);
+          Core::Logger::Info("Hook: connect to FakeIP " + domain + " (Orig: " + domain + "), fd=" + std::to_string(sockfd));
           return 0; // 成功建立隧道
         } else {
-           Core::Logger::Error("SOCKS5 Handshake failed");
+           Core::Logger::Error("SOCKS5 Handshake failed, fd=" + std::to_string(sockfd));
            errno = ECONNREFUSED;
            return -1;
         }
@@ -128,9 +204,114 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
   return connect(sockfd, addr, addrlen);
 }
 
+// 阶段5: Hook recv - 追踪连接关闭事件
+ssize_t my_recv(int sockfd, void *buf, size_t len, int flags) {
+  TrackedConn conn;
+  bool tracked = IsTracked(sockfd, &conn);
+  
+  ssize_t res = recv(sockfd, buf, len, flags);
+  
+  if (tracked) {
+    if (res == 0) {
+      // 对端正常关闭 (FIN)
+      Core::Logger::Debug("Tracked fd=" + std::to_string(sockfd) + 
+                         " recv=0 (peer FIN) for " + conn.domain);
+      // 可选：取消追踪，因为连接已关闭
+      UntrackFd(sockfd);
+    } else if (res < 0) {
+      int saved_errno = errno;
+      // 记录错误类型
+      if (saved_errno == ECONNRESET) {
+        Core::Logger::Warn("Tracked fd=" + std::to_string(sockfd) + 
+                          " recv error: ECONNRESET for " + conn.domain);
+      } else if (saved_errno == ETIMEDOUT) {
+        Core::Logger::Warn("Tracked fd=" + std::to_string(sockfd) + 
+                          " recv error: ETIMEDOUT for " + conn.domain);
+      } else if (saved_errno == EPIPE) {
+        Core::Logger::Warn("Tracked fd=" + std::to_string(sockfd) + 
+                          " recv error: EPIPE for " + conn.domain);
+      }
+      // 其他错误不记录，避免日志过多
+    }
+  }
+  
+  return res;
+}
+
+// 阶段5: Hook close - 追踪本进程主动关闭
+int my_close(int fd) {
+  TrackedConn conn;
+  bool tracked = IsTracked(fd, &conn);
+  
+  if (tracked) {
+    Core::Logger::Debug("Tracked fd=" + std::to_string(fd) + 
+                       " close() by local for " + conn.domain);
+    UntrackFd(fd);
+  }
+  
+  return close(fd);
+}
+
+DYLD_INTERPOSE(my_recv, recv)
+DYLD_INTERPOSE(my_close, close)
+
 // Hook getaddrinfo 返回 FakeIP
 int my_getaddrinfo(const char *node, const char *service,
                    const struct addrinfo *hints, struct addrinfo **res) {
+  auto ShouldMapAsDomain = [](const char *name) -> bool {
+    if (!name || name[0] == '\0')
+      return false;
+
+    std::string host(name);
+    if (host.size() > 253)
+      return false;
+
+    // 跳过明显不是域名的模式字符串或规则字符串
+    static const char *kBadChars = "/*\\ <>%";
+    if (host.find("://") != std::string::npos ||
+        host.find_first_of(kBadChars) != std::string::npos) {
+      return false;
+    }
+
+    std::string lower = host;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if (lower == "localhost" || lower.rfind("localhost.", 0) == 0 ||
+        lower.find(".local") != std::string::npos) {
+      return false;
+    }
+
+    if (host.front() == '.' || host.back() == '.')
+      return false;
+
+    bool hasDot = false;
+    bool hasAlpha = false;
+    size_t labelLen = 0;
+    for (char c : host) {
+      if (c == '.') {
+        if (labelLen == 0)
+          return false;
+        hasDot = true;
+        labelLen = 0;
+        continue;
+      }
+      unsigned char uc = static_cast<unsigned char>(c);
+      if (!(std::isalnum(uc) || c == '-'))
+        return false;
+      if (std::isalpha(uc))
+        hasAlpha = true;
+      labelLen++;
+      if (labelLen > 63)
+        return false;
+    }
+    if (labelLen == 0)
+      return false;
+    if (!hasDot || !hasAlpha)
+      return false;
+
+    return true;
+  };
+
   // 检查是否为 IP 字面量，避免递归或映射 IP
   auto IsIpLiteral = [](const char *name) -> bool {
     struct in_addr a4;
@@ -150,9 +331,13 @@ int my_getaddrinfo(const char *node, const char *service,
   }();
   (void)init;
 
+  if (hints && (hints->ai_flags & AI_NUMERICHOST)) {
+    return getaddrinfo(node, service, hints, res);
+  }
+
   if (node && Core::Config::Instance().fakeIp.enabled) {
-    // 跳过空字符串或 IP 字面量
-    if (node[0] != '\0' && !IsIpLiteral(node)) {
+    // 只映射合法域名，避免把 bypass 规则字符串映射成 FakeIP
+    if (!IsIpLiteral(node) && ShouldMapAsDomain(node)) {
       // 分配 FakeIP
       uint32_t fakeIpNet = Network::FakeIP::Instance().Alloc(node);
       if (fakeIpNet != 0) {
