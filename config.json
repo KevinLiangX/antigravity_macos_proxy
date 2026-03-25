@@ -1,5 +1,5 @@
 {
-    "log_level": "warn",
+    "log_level": "debug",
     "proxy": {
         "host": "127.0.0.1",
         "port": 7897,
@@ -10,9 +10,9 @@
         "cidr": "198.18.0.0/15"
     },
     "timeout": {
-        "connect": 1000,
-        "send": 1000,
-        "recv": 1000
+        "connect": 6000,
+        "send": 6000,
+        "recv": 6000
     },
     "proxy_rules": {
     "allowed_ports": [80, 443, 8080],

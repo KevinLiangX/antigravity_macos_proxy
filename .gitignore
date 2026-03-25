@@ -1,0 +1,14 @@
+# Generated app bundle
+Antigravity_Unlocked.app/
+
+# Log files
+*.log
+/tmp/antigravity_proxy*.log
+
+# IDE
+.vscode/
+*.xcuserdatad/
+*.xcworkspace/
+
+# macOS
+.DS_Store

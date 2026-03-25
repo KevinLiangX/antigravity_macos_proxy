@@ -3,6 +3,7 @@
 #include "Config.hpp"
 #include "Logger.hpp"
 #include <arpa/inet.h>
+#include <chrono>
 #include <fcntl.h>
 #include <poll.h>
 #include <iomanip>
@@ -40,58 +41,76 @@ private:
     pfd.events = write ? POLLOUT : POLLIN;
     pfd.revents = 0;
     
-    int remaining = timeoutMs;
-    while (remaining > 0) {
-      int pollRes = poll(&pfd, 1, remaining);
-      if (pollRes > 0) {
-        if (pfd.revents & (write ? POLLOUT : POLLIN)) {
-          return true; // 就绪
-        }
-        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-          return false; // 错误
-        }
-      } else if (pollRes == 0) {
-        return false; // 超时
-      } else if (errno != EINTR) {
-        return false; // poll 错误
+    int pollRes = poll(&pfd, 1, timeoutMs);
+    if (pollRes > 0) {
+      if (pfd.revents & (write ? POLLOUT : POLLIN)) {
+        return true; // 就绪
       }
-      // EINTR 继续，但减少剩余时间
-      remaining -= 10; // 简化处理：每次重试扣 10ms
+      if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        Core::Logger::Debug("WaitForFd: socket error, revents=" + std::to_string(pfd.revents));
+        return false; // 错误
+      }
+    } else if (pollRes == 0) {
+      Core::Logger::Debug("WaitForFd: timeout after " + std::to_string(timeoutMs) + "ms");
+      return false; // 超时
+    } else if (pollRes < 0) {
+      Core::Logger::Debug("WaitForFd: poll failed, errno=" + std::to_string(errno));
+      return false; // poll 错误
     }
     return false;
   }
 
   static bool ReadExact(int fd, uint8_t *buf, int len, int timeoutMs) {
     int total = 0;
-    int startTime = timeoutMs; // 简化：假设传入的是总超时
+    auto startTime = std::chrono::steady_clock::now();
     
-    while (total < len && startTime > 0) {
+    while (total < len) {
+      // 计算剩余超时时间
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - startTime).count();
+      int remaining = timeoutMs - elapsed;
+      if (remaining <= 0) {
+        Core::Logger::Debug("ReadExact: timeout, read " + std::to_string(total) + "/" + std::to_string(len));
+        return false;
+      }
+      
       // 等待可读
-      if (!WaitForFd(fd, false, startTime))
+      if (!WaitForFd(fd, false, remaining))
         return false;
       
       ssize_t n = recv(fd, buf + total, len - total, 0);
       if (n > 0) {
         total += n;
       } else if (n == 0) {
+        Core::Logger::Debug("ReadExact: peer closed connection");
         return false; // 对端关闭
       } else if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
         continue; // 重试
       } else {
+        Core::Logger::Debug("ReadExact: recv error, errno=" + std::to_string(errno));
         return false; // 其他错误
       }
     }
-    return total == len;
+    return true;
   }
 
   static bool SendAll(int fd, const void *buf, int len, int timeoutMs) {
     int total = 0;
     const uint8_t *p = static_cast<const uint8_t *>(buf);
-    int startTime = timeoutMs;
+    auto startTime = std::chrono::steady_clock::now();
     
-    while (total < len && startTime > 0) {
+    while (total < len) {
+      // 计算剩余超时时间
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - startTime).count();
+      int remaining = timeoutMs - elapsed;
+      if (remaining <= 0) {
+        Core::Logger::Debug("SendAll: timeout, sent " + std::to_string(total) + "/" + std::to_string(len));
+        return false;
+      }
+      
       // 等待可写
-      if (!WaitForFd(fd, true, startTime))
+      if (!WaitForFd(fd, true, remaining))
         return false;
       
       ssize_t n = send(fd, p + total, len - total, MSG_NOSIGNAL);
@@ -100,32 +119,42 @@ private:
       } else if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
         continue; // 重试
       } else {
+        Core::Logger::Debug("SendAll: send error, errno=" + std::to_string(errno));
         return false; // 其他错误
       }
     }
-    return total == len;
+    return true;
   }
 
 public:
   static bool Handshake(int sock, const std::string &targetHost,
                         uint16_t targetPort) {
-    Core::Logger::Debug("SOCKS5: Handshake start to " + targetHost);
+    Core::Logger::Info("SOCKS5: Handshake start to " + targetHost + ":" + std::to_string(targetPort));
 
     // 1. 认证请求（无认证）
+    Core::Logger::Debug("SOCKS5: Sending auth request");
     uint8_t authReq[] = {0x05, 0x01, 0x00};
-    if (!SendAll(sock, authReq, 3, 5000))
-      return false;
-
-    uint8_t authResp[2];
-    if (!ReadExact(sock, authResp, 2, 5000))
-      return false;
-
-    if (authResp[0] != 0x05 || authResp[1] != 0x00) {
-      Core::Logger::Error("SOCKS5: Auth failed");
+    if (!SendAll(sock, authReq, 3, 5000)) {
+      Core::Logger::Error("SOCKS5: Failed to send auth request");
       return false;
     }
 
+    Core::Logger::Debug("SOCKS5: Waiting for auth response");
+    uint8_t authResp[2];
+    if (!ReadExact(sock, authResp, 2, 5000)) {
+      Core::Logger::Error("SOCKS5: Failed to read auth response");
+      return false;
+    }
+
+    if (authResp[0] != 0x05 || authResp[1] != 0x00) {
+      Core::Logger::Error("SOCKS5: Auth failed, ver=" + std::to_string(authResp[0]) + 
+                          ", method=" + std::to_string(authResp[1]));
+      return false;
+    }
+    Core::Logger::Debug("SOCKS5: Auth succeeded");
+
     // 2. 连接请求
+    Core::Logger::Debug("SOCKS5: Building connect request");
     std::vector<uint8_t> req;
     req.push_back(0x05); // VER
     req.push_back(0x01); // CMD (CONNECT)
@@ -137,31 +166,40 @@ public:
       req.push_back(0x01);
       uint32_t ip = addr.s_addr;
       req.insert(req.end(), (uint8_t *)&ip, (uint8_t *)&ip + 4);
+      Core::Logger::Debug("SOCKS5: Using IPv4 address");
     } else {
       // 域名
       req.push_back(0x03);
       req.push_back((uint8_t)targetHost.length());
       for (char c : targetHost)
         req.push_back(c);
+      Core::Logger::Debug("SOCKS5: Using domain name: " + targetHost);
     }
 
     // 端口（网络字节序）
     req.push_back((targetPort >> 8) & 0xFF);
     req.push_back(targetPort & 0xFF);
 
-    if (!SendAll(sock, req.data(), (int)req.size(), 5000))
+    Core::Logger::Debug("SOCKS5: Sending connect request, size=" + std::to_string(req.size()));
+    if (!SendAll(sock, req.data(), (int)req.size(), 5000)) {
+      Core::Logger::Error("SOCKS5: Failed to send connect request");
       return false;
+    }
 
     // 3. 响应
+    Core::Logger::Debug("SOCKS5: Waiting for connect response");
     uint8_t header[4];
-    if (!ReadExact(sock, header, 4, 5000))
+    if (!ReadExact(sock, header, 4, 5000)) {
+      Core::Logger::Error("SOCKS5: Failed to read connect response");
       return false;
+    }
 
     if (header[1] != 0x00) {
       Core::Logger::Error("SOCKS5: Connect failed with code " +
                           std::to_string(header[1]));
       return false;
     }
+    Core::Logger::Debug("SOCKS5: Connect response received, atyp=" + std::to_string(header[3]));
 
     uint8_t atyp = header[3];
     int len = 0;

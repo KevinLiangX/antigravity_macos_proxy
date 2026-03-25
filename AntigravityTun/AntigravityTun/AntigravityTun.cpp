@@ -172,26 +172,44 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         // SOCKS5 握手
         // 注意：Socks5Client 此时是同步阻塞实现的。
         // 如果原始 socket 是非阻塞的，我们需要临时切换为阻塞模式。
+        Core::Logger::Debug("Preparing for SOCKS5 handshake, fd=" + std::to_string(sockfd));
         int flags = fcntl(sockfd, F_GETFL, 0);
+        if (flags < 0) {
+            Core::Logger::Error("Failed to get socket flags, fd=" + std::to_string(sockfd));
+            errno = EINVAL;
+            return -1;
+        }
         bool isNonBlock = (flags & O_NONBLOCK);
+        Core::Logger::Debug("Socket flags=" + std::to_string(flags) + ", isNonBlock=" + std::to_string(isNonBlock));
+        
         if (isNonBlock) {
-            fcntl(sockfd, F_SETFL, flags & ~O_NONBLOCK);
+            Core::Logger::Debug("Temporarily setting socket to blocking mode");
+            if (fcntl(sockfd, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+                Core::Logger::Error("Failed to set blocking mode, fd=" + std::to_string(sockfd));
+                errno = EINVAL;
+                return -1;
+            }
         }
 
+        Core::Logger::Debug("Starting SOCKS5 handshake...");
         bool handshakeSuccess = Network::Socks5Client::Handshake(sockfd, domain, port);
+        Core::Logger::Debug("SOCKS5 handshake result: " + std::string(handshakeSuccess ? "success" : "failed"));
 
         // 恢复原始 flags
         if (isNonBlock) {
-            fcntl(sockfd, F_SETFL, flags);
+            Core::Logger::Debug("Restoring socket to non-blocking mode");
+            if (fcntl(sockfd, F_SETFL, flags) < 0) {
+                Core::Logger::Error("Failed to restore non-blocking mode, fd=" + std::to_string(sockfd));
+            }
         }
 
         if (handshakeSuccess) {
           // 阶段5: 追踪成功建立隧道的连接
           TrackFd(sockfd, domain, port);
-          Core::Logger::Info("Hook: connect to FakeIP " + domain + " (Orig: " + domain + "), fd=" + std::to_string(sockfd));
+          Core::Logger::Info("Hook: SOCKS5 tunnel established to " + domain + ":" + std::to_string(port) + ", fd=" + std::to_string(sockfd));
           return 0; // 成功建立隧道
         } else {
-           Core::Logger::Error("SOCKS5 Handshake failed, fd=" + std::to_string(sockfd));
+           Core::Logger::Error("SOCKS5 Handshake failed, fd=" + std::to_string(sockfd) + ", domain=" + domain);
            errno = ECONNREFUSED;
            return -1;
         }
