@@ -160,13 +160,19 @@ public:
     req.push_back(0x01); // CMD (CONNECT)
     req.push_back(0x00); // RSV
 
-    struct in_addr addr;
-    if (inet_pton(AF_INET, targetHost.c_str(), &addr) == 1) {
+    struct in_addr addr4;
+    struct in6_addr addr6;
+    if (inet_pton(AF_INET, targetHost.c_str(), &addr4) == 1) {
       // IPv4 地址
       req.push_back(0x01);
-      uint32_t ip = addr.s_addr;
+      uint32_t ip = addr4.s_addr;
       req.insert(req.end(), (uint8_t *)&ip, (uint8_t *)&ip + 4);
       Core::Logger::Debug("SOCKS5: Using IPv4 address");
+    } else if (inet_pton(AF_INET6, targetHost.c_str(), &addr6) == 1) {
+      // IPv6 地址
+      req.push_back(0x04);
+      req.insert(req.end(), addr6.s6_addr, addr6.s6_addr + 16);
+      Core::Logger::Debug("SOCKS5: Using IPv6 address");
     } else {
       // 域名
       req.push_back(0x03);

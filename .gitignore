@@ -4,6 +4,7 @@ Antigravity_Unlocked.app/
 # Log files
 *.log
 /tmp/antigravity_proxy*.log
+GITHUB_RELEASE.md
 
 # IDE
 .vscode/

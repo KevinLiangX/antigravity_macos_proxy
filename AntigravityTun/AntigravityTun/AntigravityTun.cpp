@@ -74,8 +74,7 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     if (Network::FakeIP::Instance().IsFakeIP(ip)) {
       std::string domain = Network::FakeIP::Instance().GetDomain(ip);
       if (!domain.empty()) {
-        Core::Logger::Info("Hook: connect to FakeIP " +
-                           Network::FakeIP::Instance().GetDomain(ip) +
+        Core::Logger::Info("Hook: connect to FakeIP " + domain +
                            " (Orig: " + domain + ")");
 
         auto &config = Core::Config::Instance();
@@ -90,14 +89,28 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         int saved_errno = 0;
         
         if (isIpv6Socket) {
-          // IPv6 socket：直接使用 [::1]:port
+          // IPv6 socket：解析配置的 proxy.host
           struct sockaddr_in6 proxyAddr6;
           memset(&proxyAddr6, 0, sizeof(proxyAddr6));
           proxyAddr6.sin6_family = AF_INET6;
           proxyAddr6.sin6_port = htons(config.proxy.port);
-          proxyAddr6.sin6_addr.s6_addr[15] = 0x01; // ::1
           
-          Core::Logger::Debug("Connecting to [::1]:" + std::to_string(config.proxy.port));
+          // 首先尝试解析为真正的 IPv6 地址
+          if (inet_pton(AF_INET6, config.proxy.host.c_str(), &proxyAddr6.sin6_addr) != 1) {
+            // 如果解析失败，尝试解析为 IPv4 地址，并转化为 IPv4-Mapped IPv6 (::ffff:x.x.x.x)
+            struct in_addr ipv4;
+            if (inet_pton(AF_INET, config.proxy.host.c_str(), &ipv4) == 1) {
+              proxyAddr6.sin6_addr.s6_addr[10] = 0xff;
+              proxyAddr6.sin6_addr.s6_addr[11] = 0xff;
+              memcpy(&proxyAddr6.sin6_addr.s6_addr[12], &ipv4.s_addr, 4);
+            } else {
+              Core::Logger::Error("Invalid Proxy IP for IPv6 Socket: " + config.proxy.host);
+              errno = EINVAL;
+              return -1;
+            }
+          }
+          
+          Core::Logger::Debug("Connecting to Proxy (IPv6/Mapped): " + config.proxy.host + ":" + std::to_string(config.proxy.port));
           res = connect(sockfd, (struct sockaddr *)&proxyAddr6, sizeof(proxyAddr6));
           saved_errno = errno;
         } else {
@@ -176,7 +189,6 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         int flags = fcntl(sockfd, F_GETFL, 0);
         if (flags < 0) {
             Core::Logger::Error("Failed to get socket flags, fd=" + std::to_string(sockfd));
-            errno = EINVAL;
             return -1;
         }
         bool isNonBlock = (flags & O_NONBLOCK);
@@ -186,7 +198,6 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
             Core::Logger::Debug("Temporarily setting socket to blocking mode");
             if (fcntl(sockfd, F_SETFL, flags & ~O_NONBLOCK) < 0) {
                 Core::Logger::Error("Failed to set blocking mode, fd=" + std::to_string(sockfd));
-                errno = EINVAL;
                 return -1;
             }
         }
@@ -214,7 +225,6 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
            return -1;
         }
 
-        return 0;
       }
     }
   }
@@ -364,8 +374,8 @@ int my_getaddrinfo(const char *node, const char *service,
         struct in_addr in;
         in.s_addr = fakeIpNet;
         if (inet_ntop(AF_INET, &in, fakeIpStr, sizeof(fakeIpStr))) {
-          Core::Logger::Info("Hook: getaddrinfo mapped " + std::string(node) +
-                             " -> " + fakeIpStr);
+        Core::Logger::Info("Hook: getaddrinfo mapped " + (node ? std::string(node) : "<null>") +
+                           " -> " + fakeIpStr);
 
           // 使用 FakeIP 调用原始 getaddrinfo
           return getaddrinfo(fakeIpStr, service, hints, res);
