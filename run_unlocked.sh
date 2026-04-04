@@ -34,9 +34,16 @@ fi
 export DYLD_INSERT_LIBRARIES="$BUNDLE_DYLIB"
 export ANTIGRAVITY_CONFIG="$BUNDLE_CONFIG"
 
+export ANTIGRAVITY_LOG_FILE=1
+
+# Disable Electron built-in auto-updater and Sparkle updater
+export ELECTRON_NO_UPDATER=1
+export SUDisableAutomaticChecks=YES
+
 echo "[Run] Starting Antigravity_Unlocked.app with injection..."
 echo "      DYLD_INSERT_LIBRARIES: ${DYLD_INSERT_LIBRARIES}"
 echo "      ANTIGRAVITY_CONFIG:    ${ANTIGRAVITY_CONFIG}"
 echo "--------------------------------------------------------"
 
-"$APP_PATH" "$@"
+"$APP_PATH" --use-mock-keychain --password-store="basic" "$@" &
+echo "[SUCCESS] Antigravity_Unlocked is now running in the background."

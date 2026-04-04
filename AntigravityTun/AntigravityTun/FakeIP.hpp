@@ -7,7 +7,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <mutex>
-#include <semaphore.h>
 #include <sstream>
 #include <string>
 #include <sys/mman.h>
@@ -34,7 +33,7 @@ class FakeIP {
   static constexpr uint32_t kSharedCapacity = 4096;
   static constexpr size_t kSharedDomainMax = 255;
   static constexpr const char *kSharedMapName = "/antigravity_fakeip_map";
-  static constexpr const char *kSharedSemName = "/antigravity_fakeip_sem";
+  static constexpr const char *kSharedLockName = "/tmp/antigravity_fakeip.lock";
   static constexpr const char *kSharedMapFallbackPrefix =
       "/tmp/antigravity_fakeip_map_";
 
@@ -53,7 +52,7 @@ class FakeIP {
   };
 
   SharedTable *m_shared = nullptr;
-  sem_t *m_sem = SEM_FAILED;
+  int m_lockFd = -1;
   std::once_flag m_sharedOnce;
 
   uint64_t GetTickCount64() {
@@ -63,14 +62,21 @@ class FakeIP {
   }
 
   bool LockShared() {
-    if (m_sem == SEM_FAILED)
+    if (m_lockFd == -1)
       return false;
-    return sem_wait(m_sem) == 0;
+    struct flock fl = {};
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    return fcntl(m_lockFd, F_SETLKW, &fl) != -1;
   }
 
   void UnlockShared() {
-    if (m_sem != SEM_FAILED)
-      sem_post(m_sem);
+    if (m_lockFd != -1) {
+      struct flock fl = {};
+      fl.l_type = F_UNLCK;
+      fl.l_whence = SEEK_SET;
+      fcntl(m_lockFd, F_SETLK, &fl);
+    }
   }
 
   void EnsureSharedInitialized() {
@@ -92,13 +98,14 @@ class FakeIP {
         return fd;
       };
 
-      // 初始化信号量
-      m_sem = sem_open(kSharedSemName, O_CREAT, 0666, 1);
-      if (m_sem == SEM_FAILED) {
-        Core::Logger::Error("FakeIP: sem_open failed: " +
+      // 初始化文件范围锁 (自动回收, 防死锁)
+      m_lockFd = open(kSharedLockName, O_CREAT | O_RDWR, 0666);
+      if (m_lockFd == -1) {
+        Core::Logger::Error("FakeIP: open lock file failed: " +
                             std::string(strerror(errno)));
         return;
       }
+      fchmod(m_lockFd, 0666); // 尝试设置为所有用户可读写
 
       LockShared();
 

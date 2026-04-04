@@ -50,6 +50,11 @@ INFO_PLIST="$DEST_APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :LSEnvironment:DYLD_INSERT_LIBRARIES string $BUNDLE_DYLIB_REL" "$INFO_PLIST"
 /usr/libexec/PlistBuddy -c "Add :LSEnvironment:ANTIGRAVITY_CONFIG string $BUNDLE_CONFIG_REL" "$INFO_PLIST"
 
+echo "[*] Disabling automatic updates in Info.plist..."
+/usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$INFO_PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Delete :SUEnableAutomaticChecks" "$INFO_PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool false" "$INFO_PLIST" 2>/dev/null || true
+
 # 2. Define signing function
 sign_component() {
     local path="$1"

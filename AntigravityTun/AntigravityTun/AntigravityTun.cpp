@@ -5,9 +5,9 @@
 #include <cctype>
 #include <cstring>
 #include <dlfcn.h>
-#include <iostream>
-#include <map>
 #include <mutex>
+#include <unordered_map>
+
 #include <netinet/in.h>
 #include <string>
 #include <sys/socket.h>
@@ -18,39 +18,10 @@
 #include "Socks5.hpp"
 #include "interpose.h"
 
-// 阶段5: 连接生命周期追踪（仅追踪被我们代理的 fd）
-namespace {
-struct TrackedConn {
-  std::string domain;
-  uint16_t port;
-  bool proxied; // 是否成功建立 SOCKS 隧道
-};
-std::map<int, TrackedConn> g_trackedFds;
-std::mutex g_trackMutex;
-
-// 添加追踪
-void TrackFd(int fd, const std::string &domain, uint16_t port) {
-  std::lock_guard<std::mutex> lock(g_trackMutex);
-  g_trackedFds[fd] = {domain, port, true};
-}
-
-// 移除追踪
-void UntrackFd(int fd) {
-  std::lock_guard<std::mutex> lock(g_trackMutex);
-  g_trackedFds.erase(fd);
-}
-
-// 检查是否被追踪
-bool IsTracked(int fd, TrackedConn *out = nullptr) {
-  std::lock_guard<std::mutex> lock(g_trackMutex);
-  auto it = g_trackedFds.find(fd);
-  if (it != g_trackedFds.end()) {
-    if (out) *out = it->second;
-    return true;
-  }
-  return false;
-}
-} // namespace
+// Thread-safe map to store sockfd -> original FakeIP address mapping
+static std::mutex g_sockfd_map_mtx;
+static std::unordered_map<int, struct sockaddr_storage> g_sockfd_map;
+static std::unordered_map<int, socklen_t> g_sockfd_len_map;
 
 int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
   if (!addr)
@@ -64,12 +35,26 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
   }();
   (void)init;
 
-  // 目前只处理 IPv4 目标地址，因为 FakeIP 是 IPv4
+  uint32_t ip = 0;
+  uint16_t port = 0;
+  bool is_ipv4 = false;
+
   if (addr->sa_family == AF_INET) {
     const struct sockaddr_in *sin = (const struct sockaddr_in *)addr;
-    uint32_t ip = sin->sin_addr.s_addr;
-    uint16_t port = ntohs(sin->sin_port);
+    ip = sin->sin_addr.s_addr;
+    port = ntohs(sin->sin_port);
+    is_ipv4 = true;
+  } else if (addr->sa_family == AF_INET6) {
+    const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)addr;
+    if (IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)) {
+      memcpy(&ip, &sin6->sin6_addr.s6_addr[12], 4);
+      port = ntohs(sin6->sin6_port);
+      is_ipv4 = true;
+    }
+  }
 
+  // 处理 IPv4 目标地址，或 IPv4-Mapped IPv6
+  if (is_ipv4) {
     // 检查是否为 FakeIP
     if (Network::FakeIP::Instance().IsFakeIP(ip)) {
       std::string domain = Network::FakeIP::Instance().GetDomain(ip);
@@ -134,7 +119,7 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
           Core::Logger::Error("Connect failed, errno=" + std::to_string(saved_errno));
         }
         if (res != 0) {
-          if (errno == EINPROGRESS) {
+          if (saved_errno == EINPROGRESS) {
              // 对于非阻塞 socket，我们需要等待连接完成
              // 使用 poll 替代 select，避免 FD_SETSIZE 限制
              struct pollfd pfd;
@@ -142,7 +127,8 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
              pfd.events = POLLOUT;
              pfd.revents = 0;
              
-             int timeoutMs = config.timeout.connect_ms;
+             // 缩短 timeout，减少饿死 Chromium 事件循环的时间
+             int timeoutMs = std::min(config.timeout.connect_ms, 2000);
              int pollRes = -1;
              
              // 带 EINTR 重试的 poll
@@ -215,9 +201,17 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         }
 
         if (handshakeSuccess) {
-          // 阶段5: 追踪成功建立隧道的连接
-          TrackFd(sockfd, domain, port);
           Core::Logger::Info("Hook: SOCKS5 tunnel established to " + domain + ":" + std::to_string(port) + ", fd=" + std::to_string(sockfd));
+          
+          {
+            std::lock_guard<std::mutex> lock(g_sockfd_map_mtx);
+            struct sockaddr_storage storage;
+            memset(&storage, 0, sizeof(storage));
+            memcpy(&storage, addr, addrlen);
+            g_sockfd_map[sockfd] = storage;
+            g_sockfd_len_map[sockfd] = addrlen;
+          }
+          
           return 0; // 成功建立隧道
         } else {
            Core::Logger::Error("SOCKS5 Handshake failed, fd=" + std::to_string(sockfd) + ", domain=" + domain);
@@ -232,56 +226,7 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
   return connect(sockfd, addr, addrlen);
 }
 
-// 阶段5: Hook recv - 追踪连接关闭事件
-ssize_t my_recv(int sockfd, void *buf, size_t len, int flags) {
-  TrackedConn conn;
-  bool tracked = IsTracked(sockfd, &conn);
-  
-  ssize_t res = recv(sockfd, buf, len, flags);
-  
-  if (tracked) {
-    if (res == 0) {
-      // 对端正常关闭 (FIN)
-      Core::Logger::Debug("Tracked fd=" + std::to_string(sockfd) + 
-                         " recv=0 (peer FIN) for " + conn.domain);
-      // 可选：取消追踪，因为连接已关闭
-      UntrackFd(sockfd);
-    } else if (res < 0) {
-      int saved_errno = errno;
-      // 记录错误类型
-      if (saved_errno == ECONNRESET) {
-        Core::Logger::Warn("Tracked fd=" + std::to_string(sockfd) + 
-                          " recv error: ECONNRESET for " + conn.domain);
-      } else if (saved_errno == ETIMEDOUT) {
-        Core::Logger::Warn("Tracked fd=" + std::to_string(sockfd) + 
-                          " recv error: ETIMEDOUT for " + conn.domain);
-      } else if (saved_errno == EPIPE) {
-        Core::Logger::Warn("Tracked fd=" + std::to_string(sockfd) + 
-                          " recv error: EPIPE for " + conn.domain);
-      }
-      // 其他错误不记录，避免日志过多
-    }
-  }
-  
-  return res;
-}
 
-// 阶段5: Hook close - 追踪本进程主动关闭
-int my_close(int fd) {
-  TrackedConn conn;
-  bool tracked = IsTracked(fd, &conn);
-  
-  if (tracked) {
-    Core::Logger::Debug("Tracked fd=" + std::to_string(fd) + 
-                       " close() by local for " + conn.domain);
-    UntrackFd(fd);
-  }
-  
-  return close(fd);
-}
-
-DYLD_INTERPOSE(my_recv, recv)
-DYLD_INTERPOSE(my_close, close)
 
 // Hook getaddrinfo 返回 FakeIP
 int my_getaddrinfo(const char *node, const char *service,
@@ -387,8 +332,41 @@ int my_getaddrinfo(const char *node, const char *service,
   return getaddrinfo(node, service, hints, res);
 }
 
+// Hook getpeername to return the original destination address (FakeIP) instead of proxy IP
+int my_getpeername(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
+  if (!addr || !addrlen)
+    return getpeername(sockfd, addr, addrlen);
+  
+  {
+    std::lock_guard<std::mutex> lock(g_sockfd_map_mtx);
+    auto it = g_sockfd_map.find(sockfd);
+    if (it != g_sockfd_map.end()) {
+      socklen_t storedLen = g_sockfd_len_map[sockfd];
+      size_t copyLen = (*addrlen < storedLen) ? *addrlen : storedLen;
+      memcpy(addr, &it->second, copyLen);
+      *addrlen = storedLen; // POSIX Requires setting it to the actual address length
+      return 0; // Success
+    }
+  }
+  
+  // Fallback to system getpeername for non-tunneled sockets
+  return getpeername(sockfd, addr, addrlen);
+}
+
+// Hook close to clean up our map
+int my_close(int fd) {
+  {
+    std::lock_guard<std::mutex> lock(g_sockfd_map_mtx);
+    g_sockfd_map.erase(fd);
+    g_sockfd_len_map.erase(fd);
+  }
+  return close(fd);
+}
+
 DYLD_INTERPOSE(my_connect, connect)
 DYLD_INTERPOSE(my_getaddrinfo, getaddrinfo)
+DYLD_INTERPOSE(my_getpeername, getpeername)
+DYLD_INTERPOSE(my_close, close)
 
 // 构造函数
 __attribute__((constructor)) void LoaderInit() {
