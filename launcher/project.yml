@@ -1,0 +1,61 @@
+name: AntigravityProxyLauncher
+options:
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  AntigravityProxyLauncher:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Sources
+        excludes:
+          - CLI
+          - Compatibility/compatibility.json
+      - path: Resources
+        buildPhase: resources
+      - path: Sources/Compatibility/compatibility.json
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.antigravity.proxy.launcher
+        PRODUCT_NAME: AntigravityProxyLauncher
+        MACOSX_DEPLOYMENT_TARGET: 13.0
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Antigravity Proxy Launcher
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  AntigravityProxyLauncherCLI:
+    type: tool
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Sources
+        includes:
+          - CLI
+          - Models
+          - Services
+          - Utilities
+    settings:
+      base:
+        PRODUCT_NAME: AntigravityProxyLauncherCLI
+        MACOSX_DEPLOYMENT_TARGET: 13.0
+schemes:
+  AntigravityProxyLauncher:
+    build:
+      targets:
+        AntigravityProxyLauncher: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  AntigravityProxyLauncherCLI:
+    build:
+      targets:
+        AntigravityProxyLauncherCLI: all
+    run:
+      config: Debug

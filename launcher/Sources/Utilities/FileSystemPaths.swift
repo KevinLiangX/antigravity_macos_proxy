@@ -1,0 +1,137 @@
+import Foundation
+
+enum FileSystemPaths {
+    private static var sourceFileURL: URL {
+#if DEBUG
+        URL(fileURLWithPath: #filePath)
+#else
+        Bundle.main.bundleURL.appendingPathComponent("Sources/Utilities/FileSystemPaths.swift")
+#endif
+    }
+
+    private static var appBundleResourceRoot: URL? {
+        Bundle.main.resourceURL
+    }
+
+    private static func bundleResourceURL(
+        named name: String,
+        withExtension ext: String,
+        subdirectory: String? = nil
+    ) -> URL? {
+        if let url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: subdirectory) {
+            return url
+        }
+
+#if SWIFT_PACKAGE
+        if let url = Bundle.module.url(forResource: name, withExtension: ext, subdirectory: subdirectory) {
+            return url
+        }
+#endif
+
+        guard let root = appBundleResourceRoot else {
+            return nil
+        }
+
+        if let subdirectory, !subdirectory.isEmpty {
+            return root
+                .appendingPathComponent(subdirectory, isDirectory: true)
+                .appendingPathComponent("\(name).\(ext)")
+        }
+
+        return root.appendingPathComponent("\(name).\(ext)")
+    }
+
+    static var launcherRoot: URL {
+        sourceFileURL
+            .deletingLastPathComponent() // Utilities
+            .deletingLastPathComponent() // Sources
+            .deletingLastPathComponent() // launcher
+    }
+
+    static var projectRoot: URL {
+        launcherRoot.deletingLastPathComponent()
+    }
+
+    static var siblingProxyRepoRoot: URL {
+        projectRoot
+            .deletingLastPathComponent()
+            .appendingPathComponent("antigravity_macos_proxy", isDirectory: true)
+    }
+
+    static let targetApp = URL(fileURLWithPath: "/Applications/Antigravity.app")
+    static let patchedApp = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Applications/Antigravity_Unlocked.app", isDirectory: true)
+
+    static let appSupportRoot = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/AntigravityProxy", isDirectory: true)
+
+    static let settingsFile = appSupportRoot
+        .appendingPathComponent("settings.json")
+
+    static let compatibilityRegistryCacheFile = appSupportRoot
+        .appendingPathComponent("compatibility.registry.json")
+
+    static let compatibilityRegistryCacheMetaFile = appSupportRoot
+        .appendingPathComponent("compatibility.registry.meta.json")
+
+    static let metadataRoot = appSupportRoot
+        .appendingPathComponent("metadata", isDirectory: true)
+
+    static let userConfigRoot = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Antigravity", isDirectory: true)
+
+    static let userProxyConfigFile = userConfigRoot
+        .appendingPathComponent("proxy_config.json")
+
+    static let diagnosticsRoot = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/AntigravityProxyLauncher", isDirectory: true)
+
+    static let patchLogFile = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/AntigravityProxy/patch.log")
+
+    static var requiredRuntimeDirectories: [URL] {
+        [
+            appSupportRoot,
+            metadataRoot,
+            userConfigRoot,
+            diagnosticsRoot,
+            patchLogFile.deletingLastPathComponent()
+        ]
+    }
+
+    static func ensureRuntimeDirectoriesExist() throws {
+        let fm = FileManager.default
+        for directory in requiredRuntimeDirectories {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+    }
+
+    static var bundledDylib: URL {
+        bundleResourceURL(named: "libAntigravityTun", withExtension: "dylib")
+            ?? launcherRoot.appendingPathComponent("Resources/libAntigravityTun.dylib")
+    }
+
+    static var bundledEntitlements: URL {
+        bundleResourceURL(named: "entitlements", withExtension: "plist")
+            ?? launcherRoot.appendingPathComponent("Resources/entitlements.plist")
+    }
+
+    static var bundledProxyConfigTemplate: URL {
+        bundleResourceURL(named: "proxy_config.template", withExtension: "json")
+            ?? launcherRoot.appendingPathComponent("Resources/proxy_config.template.json")
+    }
+
+    static var bundledCompatibilityRegistry: URL? {
+        bundleResourceURL(named: "compatibility", withExtension: "json")
+            ?? bundleResourceURL(named: "compatibility", withExtension: "json", subdirectory: "Compatibility")
+            ?? launcherRoot.appendingPathComponent("Sources/Compatibility/compatibility.json")
+    }
+
+    static var fallbackProxyRepoDylib: URL {
+        siblingProxyRepoRoot.appendingPathComponent("libAntigravityTun.dylib")
+    }
+
+    static var fallbackProxyRepoEntitlements: URL {
+        siblingProxyRepoRoot.appendingPathComponent("entitlements.plist")
+    }
+}

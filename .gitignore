@@ -13,3 +13,23 @@ GITHUB_RELEASE.md
 
 # macOS
 .DS_Store
+# macOS
+.DS_Store
+
+# Swift build artifacts
+.build/
+.swiftpm/
+
+# Xcode and CocoaPods
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# Generated build and release directories
+launcher/dist/
+launcher/.build/
+dist/
+
+# Logs files
+*.log

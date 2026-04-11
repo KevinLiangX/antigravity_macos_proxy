@@ -1,351 +1,105 @@
-# 1. antigravity-macos- proxy
-主要针对MacOS用户采用proxifier和代理软件或者tun模式使用antigravity IDE 工具的场景进行优化。使用MacOS的DYLD透明注入的方式，实现antigravity无全局代理方式使用。
+# Antigravity Proxy Launcher (v2.0)
 
-## 1.1 功能特性 (Features)
+欢迎来到 **Antigravity Proxy Launcher** v2.0 仓库。
+本项目通过动态库（dylib）注入与 macOS 环境重配机制，对目标应用进行代理增强与规则修补，并提供开箱即用的原生桌面级体验。
 
-- ✅ **透明代理**：无需修改应用程序，自动拦截网络请求
-- ✅ **FakeIP 技术**：将域名映射到虚假 IP，实现域名级别的流量控制
-- ✅ **SOCKS5 支持**：通过 SOCKS5 代理转发流量
-- ✅ **多进程支持**：通过共享内存在多进程间同步 FakeIP 映射
-- ✅ **灵活配置**：支持 JSON 配置文件，可自定义代理、端口、超时等参数
-- ✅ **进程过滤**：可选择性地只对特定进程生效
-- ✅ **Socket 适配**：完美适配阻塞与非阻塞 Socket 模式，解决 Agent 与代理交互问题
+---
 
-# 2. 为什么要搞这个？
-macOS 更新到最新版本，使用代理动不动网络就异常。使用VPN也是tun模式，要是开启clash的tun模式，简直是灾难。
-主要参考 `yuaotian/antigravity-proxy`和`Mac-XK/AntigravityTun`两位大佬的项目。
-1. antigravity-proxy 项目，在win11和 wsl2上面都可以使用，使用win11或者wsl2的用户可以使用。
-2. Mac-XK/AntigravityTun项目，好像该大佬不维护了，我试了好几次，都没成功。提供了扩展思路
+## 1. 过去的样子与技术原理 (v1.0)
 
-# 3. 整体问题分析过程
-动态链接库的侵入，可以看下Mac-XK/AntigravityTun项目。该大佬讲的很明白。但是该大佬项目为啥不行？
+在 v1.0 阶段，本项目的核心受脱壳补丁思想启发，主要是一套运行在终端里的 Shell 脚本集合（如 `run_unlocked.sh`）。
+用户必须手动在 Terminal 中执行命令行脚本才能完成 `xattr` 属性清理、`dylib` 注入、沙盒数据迁移、重签名以及目标应用的代理重启。
 
-目标应用（antigravity）开启了 macOS 的 **Hardened Runtime** (强化运行时) 安全机制，且缺失了允许注入的关键 Entitlements（权限）：
-1.  **缺少** `com.apple.security.cs.disable-library-validation`: 这导致系统强制要求所有加载的动态库必须由同一开发者签名或由 Apple 签名。我们的 dylib 是本地编译的，因此被拒绝。
-2.  **缺少** `com.apple.security.cs.allow-dyld-environment-variables`: 这导致系统忽略 `DYLD_INSERT_LIBRARIES` 环境变量。
-3.  **缺少** `language_server_macos_arm`的签名，导致后面已经到了代理，Agent依然没法加载。
+**如果你想探究底层核心的劫持原理（如 `DYLD_INSERT_LIBRARIES`、Inside-out 重签名、基于环境变量的代理控制等）**，它们在 v2.0 中依然是底层的技术基石。详细原理解析请参阅我们特意归档的旧版文档：
+👉 [**v1.0 架构与技术原理文档 (docs/README_v1.md)**](docs/README_v1.md)
 
-# 4. 解决方案 (Solution)
+---
 
-## 4.1 工作原理 (How it Works)
+## 2. 现在的架构 (v2.0)
 
-```
-应用程序调用 getaddrinfo("example.com")
-         ↓
-被 Hook 拦截，返回 FakeIP (198.18.x.x)
-         ↓
-应用程序调用 connect(198.18.x.x:443)
-         ↓
-被 Hook 拦截，识别为 FakeIP
-         ↓
-连接到 SOCKS5 代理服务器
-         ↓
-发送真实域名 "example.com" 给代理
-         ↓
-代理完成实际连接
-```
+经过 v2.0 的全面重构，本项目已升级为工程级标准库，将底层二进制级别的注入逻辑与图形交互页面的状态调度分离：
 
-## 4.2 解锁方案 (Unlock Mechanism)
+- **`AntigravityTun/`**：[核心注入层] 包含基于 C/C++ 与 Objective-C 编写的劫持动态库，编译产物为 `libAntigravityTun.dylib`。
+- **`launcher/`**：[原生交互层] 基于 Swift / SwiftUI 构建的 macOS 原生桌面 App。主要负责状态编排、兼容判断、数据调度以及提供 GUI 面板。
+- **`docs/`**：[设计与规范] 架构提案、发布手册、开发环境配置方案以及历史归档。
+- **`legacy_scripts/` & `tools/`**：[历史与脚手架] v1 版本的 bash 注入方案原型，以及 Socks5 mock 等辅助测试脚本已收入其中。
 
-**核心思路**: 对目标应用进行 **重签名 (Re-sign)**，植入一个宽松的 `entitlements.plist`，使其允许加载任意库。
+---
 
-### 修改内容 (Changes)
+## 3. v2.0 增加了哪些新功能？
 
-1.  **`entitlements.plist`**:
-    创建了一个包含以下关键键值的权限文件：
-    *   `<key>com.apple.security.cs.disable-library-validation</key> <true/>` (允许加载未签名/第三方库)
-    *   `<key>com.apple.security.cs.allow-dyld-environment-variables</key> <true/>` (允许环境变量注入)
-    *   `<key>com.apple.security.cs.allow-jit</key> <true/>` (Electron 应用运行所需)
+我们彻底抛弃了简陋的“一键黑框脚本”，v2.0 为用户带来了成熟软件级别的增强体验：
 
-2.  **`robust_unlock.sh` (重签名脚本)**:
-    为了应对复杂的 App 结构（包含多个 Frameworks 和辅助进程），编写了此脚本执行 **Deepest-First (由内向外)** 的递归重签名：
-    *   **Step 1**: 复制 `Antigravity.app` 为 `Antigravity_Unlocked.app`。
-    *   **Step 2**: 清除所有文件的扩展属性 (`xattr -cr`)。
-    *   **Step 3**: 遍历 App 包内所有 Mach-O 二进制文件，按路径深度排序。
-    *   **Step 4**: 先移除原有签名，再使用本地 Ad-Hoc 证书 (`--sign -`) 和新的 `entitlements.plist` 重新签名。
+- ✨ **原生 macOS 桌面 App化**：告别终端敲命令。采用 SwiftUI 全新构建的总览 Dashboard 界面，全流程展示注入和准备状态。
+- 🛡 **智能检测与兼容性引擎**：动态扫描本机的目标应用，对比内置与远程更新的兼容性规则库（`compatibility.json`）。对于不支持的 App 版本，执行强拦截以防止破坏性写入操作污染原版 App。
+- 📦 **安全沙盒与自动回滚**：支持失败全自动回滚，修出问题自动恢复干净环境。修复包单独隔离在 `~/Applications/` 下。
+- 📊 **可视化代理配置**：内置本地与远程代理信息的读写系统，可在界面配置（`proxy_config.json`），免进目录改文件。配额面板（Quota）可对接后端实时检测流量消耗。
+- 🩺 **强大的诊断与日志跟踪**：增加专门的诊断页（Diagnostics），包含系统失败聚合追踪。支持一键导出排障日志压缩包和快速测试底层验证模块。
+- 🚀 **自动化打包与分发流水线 (CI/CD)**：借助 XcodeGen 与脚本矩阵，支持纯命令行一键输出带新应用图标的正式 `.dmg` 及 `.zip` 无签名/带签名交付包。
+- 📦 **内置更新订阅驱动**：基于 JSON 远程订阅流 `release.json` 的应用内热更新提示，支持跳过/恢复更新。
 
-### 使用的问题
+## 4. 安装与运行指南
 
-由于我们移除了原厂签名（Re-signed with ad-hoc identity）：
+1. **下载与安装**：获取最新的 `.dmg` 安装包，双击打开后，将 `Antigravity Proxy Launcher.app` 拖入到 `Applications`（应用程序）文件夹中。
+2. **首次运行**：前往应用程序文件夹，找到该应用并双击打开。
+3. **遇到报错？解除隔离属性**：
+   如果你在打开应用时遇到“文件已损坏”或“无法验证开发者”的系统拦截，这是由于 macOS 的 Gatekeeper 安全机制（Quarantine 隔离属性）导致的。你只需要打开**终端 (Terminal)**，执行以下命令将其解除隔离即可：
+   ```bash
+   xattr -cr /Applications/Antigravity\ Proxy\ Launcher.app
+   ```
+   执行完毕后，再次双击 App 即可正常无缝运行。
 
-✅ 核心功能: Electron 应用的 Web 渲染、本地逻辑通常不受影响。
+---
 
-⚠️ iCloud/推送: 如果原应用依赖 Apple 的云服务或推送通知（APS），这些功能会失效（因为它们强绑定签名的 Team ID）。
+## 5. 快速上手：核心功能模块说明
 
-⚠️ 钥匙串访问: 可能会提示“是否允许访问钥匙串”，需要输入密码授权（因为签名改变了）。**√ 这个是一定会出现的。输入登录你macos的密码就行了。**
+为了让你和用户能在第一次打开 App 时就知道该点什么，这里梳理了五个核心选项卡（Tab）的完整操作指南：
 
-⚠️ 自动更新: 内置的自动更新功能通常无法验证新包的签名，可能会破坏解锁状态，建议关闭自动更新。**建议是把原来安装的app留着，方便更新。更新后重新解锁，继续使用。**
+### 🖥️ 1. 总览页 (Dashboard)
+**定位：整个 App 的一键启动调度中心**
+- **功能说明：** 上方展示你本机的原版 App 检测状态、版本兼容情况以及注入修补包的准备状态。下方实时滚动你在底层抛出的修补进度和验证日志。
+- **用户操作：** 如果出现绿色状态，这里会有最大的一个主按钮**「修复并启动」**。没报错的话，你日常只需点这一个按钮，剩下的脏活累活 App 会全自动完成，并帮你调起目标应用。出现更新也会在这个界面顶部弹出横幅。
+- **效果图：**
+![总览](docs/images/总览.png)
 
+### 🌐 2. 代理设置页 (Config)
+**定位：网络节点中转管家**
+- **功能说明：** 告别过去每次换节点都要钻进系统隐藏文件夹手动改 `proxy_config.json` 的噩梦。
+- **用户操作：** 支持配置 Socks5 / HTTP 等本地与远程节点信息，修改后直接点击保存写入持久化沙盒。
+- **效果图：**
+![网络代理设置](docs/images/网络代理设置.png)
 
-# 5. 环境与构建依赖 (Environment & Prerequisites)
+### 📈 3. 配额管理页 (Quota)
+**定位：流量消耗与订阅看板**
+- **功能说明：** 对接服务后端，自动展示你当前节点的传输流量消耗情况、当日上限及总体使用额度。
+- **用户操作：** 纯看用，方便随时把握你的代理流量剩余状况。
+- **效果图：**
+![配置管理](docs/images/配置管理.png)
 
-在开始之前，请确保你的开发环境满足以下要求：
+### 🩺 4. 常见问题与诊断页 (Diagnostics)
+**定位：进阶玩家的“硬核修车铺”**
+- **功能说明：** 万一上面第一步的「修复并启动」失败了，这里是你找问题的中控台。包含：底层状态注入验证器、历史失败追踪记录，以及非常实用的**内置 FAQ 指南**。
+- **用户操作：** 若运行异常，来这里读 FAQ 或点击「**一键导出诊断快照**」。它会瞬间将你的错误日志打包成 Zip，你可以直接发给二开开发者排查。如果怀疑注入被破坏，可以点「测试底层验证」强制排障。
+- **效果图：**
+![常见问题](docs/images/常见问题.png)
 
-### 系统要求 (OS)
-*   **macOS**: 必须是 macOS 系统 (推荐 macOS 12 Monterey 及以上)，因为项目依赖 `DYLD_INSERT_LIBRARIES` 注入机制。
+### ⚙️ 5. 偏好设置页 (Settings)
+**定位：强迫症患者的规则中枢**
+- **功能说明：** 控制 App 自身的行为逻辑，如是否在修复失败时默认导出诊断包，或修复后不自动拉起目标应用。同时包含对底层**云端兼容性规则库**的更新接管。
+- **用户操作：** 可在这里添加信任的域名白名单或修改兼容判定规则更新地址。如果收到了不想升级的版本提示，也可以在这里取消忽略。
+- **效果图：**
+![偏好设置](docs/images/偏好设置.png)
 
-### 构建工具 (Build Tools)
-*   **Xcode**: 这里不安装全部的Xcode，仅安装 Command Line Tools (CLT)。直接使用compile_without_xcode.sh即可
-*   **C++ 编译器**: Clang (随 Xcode 附带)，支持 C++17 标准。
-*   **Python 3**: 用于运行测试脚本 (`mock_socks5.py`, `test_request.py`)。
+---
 
-### 依赖组件 (Dependencies)
-*   本项目无第三方 C++ 库依赖，仅使用 macOS SDK 标准库 (`dlfcn.h`, `sys/socket.h` 等)。
+## 📚 二次开发与正式版构建分发指南
 
-# 6. 使用指南 (Usage Guide)
+想要编译这个全新的 v2.0 原生应用？想要为它做二次开发？或者是想发一个内部测试版给朋友用？请直接点开我们这篇最全最精炼的手册：
 
-按照以下步骤即可完成配置并启动。
-
-### 6.1 获取项目与环境准备 (Clone & Prepare)
-
-1.  **下载代码**:
-    ```bash
-    git clone git@github.com:KevinLiangX/antigravity_macos_proxy.git
-    cd antigravity_macos_proxy
-    ```
-
-### 6.2 编译动态库 (Build Dylib)
-
-> **选择 A (推荐)**: 运行轻量级编译脚本 (仅需 Command Line Tools，无需安装完整 Xcode)。
-> ```bash
-> ./compile_without_xcode.sh
-> ```
-
-> **选择 B (源码编译)**: 使用 Xcode 项目构建 (需安装完整 Xcode)。
->
-> **选择 B (源码编译)**: 如果你是 clone 的源码，修改了源码，可以进行手动编译：
-
-```bash
-# 清空干扰项
-export DYLD_INSERT_LIBRARIES=""
-
-# 编译生成 dylib
-xcodebuild -project AntigravityTun.xcodeproj -scheme AntigravityTun -configuration Release
-
-# (可选) 将编译产物复制到根目录，方便脚本调用
-# cp build/Release/libAntigravityTun.dylib .
-```
-
-### 6.3 应用解锁 (Unlock App)
-
-此步骤将复制原版应用 (`/Applications/Antigravity.app`)，并进行重签名以注入权限。
-
-```bash
-# 确保 entitlements.plist 和 robust_unlock.sh 在当前目录
-./robust_unlock.sh
-```
-
-*   **执行结果**: 当前目录下会生成一个新的 `Antigravity_Unlocked.app`。
-
-### 6.4 启动运行 (Run)
-
-使用启动脚本加载代理配置并运行解锁后的应用：
-
-```bash
-# 1. 修改配置 (如果需修改代理端口)
-cp proxy_config.json.example config.json
-vim config.json
-
-# 2. 重新解锁（会把 lib/config 写入 app 包并写入 LSEnvironment，保证重启后也生效）
-./robust_unlock.sh
-
-# 3. 启动应用
-./run_unlocked.sh
-```
-*   **注意**: 过程中可能会弹出“是否允许访问钥匙串”或要求输入密码，请输入当前用户登录密码以授权重签名。
-*   
-# 7. 配置指南 (Configuration)
-
-## 7.1 创建配置文件
-
-在以下任一位置创建配置文件（`config.json` 或 `proxy_config.json` 均可）：
-
-- `~/.config/antigravity/config.json` （推荐）
-- `~/.config/antigravity/proxy_config.json`
-- `./config.json` （当前目录）
-- `./proxy_config.json`
-- `/tmp/config.json`
-- `/tmp/proxy_config.json`
-- 或通过环境变量 `ANTIGRAVITY_CONFIG` 指定路径
-
-## 7.2 配置文件示例
-
-```json
-{
-  "log_level": "warn",
-  "proxy": {
-    "host": "127.0.0.1",
-    "port": 7897,
-    "type": "socks5"
-  },
-  "fake_ip": {
-    "enabled": true,
-    "cidr": "198.18.0.0/15"
-  },
-  "timeout": {
-    "connect": 1000,
-    "send": 3000,
-    "recv": 8000
-  },
-  "proxy_rules": {
-    "allowed_ports": [80, 443, 8080],
-    "dns_mode": "direct",
-    "ipv6_mode": "proxy",
-    "udp_mode": "block"
-  },
-  "traffic_logging": false,
-  "child_injection": true,
-  "target_processes": []
-}
-```
-
-## 7.3 配置项说明
-
-### proxy（代理设置）
-
-| 参数   | 类型   | 默认值        | 说明                          |
-| ------ | ------ | ------------- | ----------------------------- |
-| `host` | string | `"127.0.0.1"` | SOCKS5 代理服务器地址         |
-| `port` | number | `7897`        | SOCKS5 代理服务器端口         |
-| `type` | string | `"socks5"`    | 代理类型（目前仅支持 socks5） |
-
-**修改代理地址和端口示例：**
-
-```json
-{
-  "proxy": {
-    "host": "192.168.1.100",
-    "port": 1080,
-    "type": "socks5"
-  }
-}
-```
-
-### fake_ip（FakeIP 设置）
-
-| 参数      | 类型    | 默认值            | 说明                       |
-| --------- | ------- | ----------------- | -------------------------- |
-| `enabled` | boolean | `true`            | 是否启用 FakeIP            |
-| `cidr`    | string  | `"198.18.0.0/15"` | FakeIP 地址段（CIDR 格式） |
-
-### timeout（超时设置）
-
-| 参数      | 类型   | 默认值 | 说明                 |
-| --------- | ------ | ------ | -------------------- |
-| `connect` | number | `1000` | 连接超时时间（毫秒） |
-| `send`    | number | `3000` | 发送超时时间（毫秒） |
-| `recv`    | number | `8000` | 接收超时时间（毫秒） |
-
-### proxy_rules（代理规则）
-
-| 参数            | 类型   | 默认值      | 说明                                         |
-| --------------- | ------ | ----------- | -------------------------------------------- |
-| `allowed_ports` | array  | `[80, 443]` | 允许代理的端口列表（空数组表示允许所有端口） |
-| `dns_mode`      | string | `"direct"`  | DNS 处理模式                                 |
-| `ipv6_mode`     | string | `"proxy"`   | IPv6 处理模式                                |
-| `udp_mode`      | string | `"block"`   | UDP 处理模式                                 |
-
-### 其他设置
-
-| 参数               | 类型    | 默认值   | 说明                               |
-| ------------------ | ------- | -------- | ---------------------------------- |
-| `log_level`        | string  | `"warn"` | 日志级别（debug/info/warn/error）  |
-| `traffic_logging`  | boolean | `false`  | 是否记录流量日志                   |
-| `child_injection`  | boolean | `true`   | 是否注入子进程                     |
-| `target_processes` | array   | `[]`     | 目标进程列表（空数组表示所有进程） |
-
-#### 文件日志（排障用）
-
-- 默认不落盘日志（性能优先）。子进程（例如 `language_server_macos_arm`）的 stderr 常被 Electron 管道接走，因此终端不一定看得到完整日志。
-- 需要落盘时，启动前设置环境变量：
-  - `ANTIGRAVITY_LOG_FILE=1`
-- 开启后会生成：
-  - `/tmp/antigravity_proxy.<PID>.log`（每个进程一个文件）
-
-**只对特定进程生效示例：**
-
-```json
-{
-  "target_processes": ["curl", "wget", "chrome"]
-}
-```
-
-# 8. 故障排查 (Troubleshooting)
-
-排查原则：先确认 SOCKS 端口可用 -> 再确认注入生效 -> 再看 FakeIP/隧道 -> 最后定位断流原因。
-
-## 8.1 快速检查（1 分钟）
-
-1) 确认 Clash/Mihomo SOCKS 端口监听（默认 7897）
-```bash
-lsof -nP -iTCP:7897 -sTCP:LISTEN
-```
-
-2) 确认 IPv6 loopback 可连（如果进程使用 IPv6 socket，会连接 ::1）
-```bash
-nc -vz ::1 7897
-```
-
-3) 确认解锁包写入了 restart-safe 注入环境
-```bash
-/usr/libexec/PlistBuddy -c "Print :LSEnvironment" "Antigravity_Unlocked.app/Contents/Info.plist"
-```
-
-## 8.2 确认注入是否生效（关键）
-
-1) 找到语言服务进程（通常是实际发请求的进程）
-```bash
-pgrep -fl language_server_macos_arm
-```
-
-2) 确认 dylib 已加载
-```bash
-vmmap <PID> | rg "libAntigravityTun\.dylib" || echo "NO_DYLIB"
-```
-
-3) 确认该进程确实连到了本地 SOCKS
-```bash
-lsof -nP -p <PID> -a -iTCP | rg "7897" || echo "NO_SOCKS_CONN"
-```
-
-## 8.3 /tmp 目录里的文件说明
-
-- `/tmp/antigravity_fakeip_map_<uid>.bin`（如 `_501.bin`）
-  - 用于多进程共享 FakeIP <-> 域名映射（命中 FakeIP 后反查域名做 SOCKS5 CONNECT）。
-  - 如果系统共享内存不可用，会回退到该文件（属于正常机制）。
-  - 可删除；下次运行会自动重新生成（不建议运行中频繁删除）。
-
-- `/tmp/antigravity_proxy.<PID>.log`
-  - 仅当设置 `ANTIGRAVITY_LOG_FILE=1` 时生成（排障用）。
-  - 建议同时把配置 `log_level` 临时改为 `debug`，用完再改回 `warn`。
-
-## 8.4 常见错误分流
-
-### 1) `connect: invalid argument` / `EINVAL`
-含义：connect 阶段失败（常见于非阻塞连接等待或地址族不匹配）。
-
-建议：
-- 确认使用的是最新 dylib（重新编译 + 复制进 app bundle + 重启）。
-- 开启 debug + file log 后查看是否出现 `poll failed` / `so_error` / `Async connect timeout`。
-
-### 2) `unexpected EOF`（流式中途断开）
-含义：隧道通常已建立，但流式读取过程中对端或链路中途关闭连接。
-
-建议：
-- 开启 debug + file log 后看连接追踪信息：
-  - `recv=0 (peer FIN)`：对端优雅关闭（更偏服务端/中间层策略）
-  - `ECONNRESET`：链路被 reset（更偏节点质量/中间设备）
-  - `close() by local`：本进程主动结束（更偏上层超时/重试）
-- 同一时间对照 Clash 日志是否发生节点切换/重载配置。
-
-## 8.5 性能慢（首包慢/吞吐低）
-
-- 确保 `log_level` 为 `warn`（debug 会明显拖慢）。
-- 默认不要开 `ANTIGRAVITY_LOG_FILE`（落盘 I/O 会放大性能损耗）。
-- 如仍慢：适当增大 `timeout.recv`（例如 8000~15000ms）以减少抖动导致的重试。
-
-
-# 9. 贡献
+👉 [**《Antigravity Proxy Launcher 二开、构建与分发完整指南》**](docs/app_build_distribution_guide.md)
+
+
+## 贡献
 欢迎提交 Issue 和 Pull Request！
 
 **免责声明 (Disclaimer)**
