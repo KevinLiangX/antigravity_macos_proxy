@@ -73,6 +73,19 @@
 **定位：流量消耗与订阅看板**
 - **功能说明：** 对接服务后端，自动展示你当前节点的传输流量消耗情况、当日上限及总体使用额度。
 - **用户操作：** 纯看用，方便随时把握你的代理流量剩余状况。
+- **Client 配置：** 首次使用请前往设置页填写并保存 Google OAuth 的 `Client ID` 与 `Client Secret`。
+  ```json
+  {
+    "client_id": "<your-google-oauth-client-id>",
+    "client_secret": "<your-google-oauth-client-secret>"
+  }
+  ```
+- **如何获取 Client 信息（Google Cloud Console）：**
+  1. 打开 Google Cloud Console，选择或创建项目。
+  2. 进入 `APIs & Services` -> `OAuth consent screen`，完成应用信息配置。
+  3. 进入 `APIs & Services` -> `Credentials`，点击 `Create Credentials` -> `OAuth client ID`。
+  4. Application type 选择 `Desktop app`（或与你的回调方式匹配的类型），创建后复制 `Client ID` 与 `Client Secret`。
+  5. 回到本应用 `设置` 页，填写并点击“保存并应用参数”，后续即可直接登录。
 - **效果图：**
 ![配置管理](docs/images/配置管理.png)
 

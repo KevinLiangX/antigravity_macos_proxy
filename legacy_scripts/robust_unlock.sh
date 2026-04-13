@@ -1,13 +1,17 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 APP_NAME="Antigravity"
 SRC_APP="/Applications/${APP_NAME}.app"
-DEST_APP="./${APP_NAME}_Unlocked.app"
-ENTITLEMENTS="./entitlements.plist"
-LOCAL_DYLIB="./libAntigravityTun.dylib"
-LOCAL_CONFIG="./config.json"
-LOCAL_CONFIG_FALLBACK="./proxy_config.json.example"
+DEST_APP="${SCRIPT_DIR}/${APP_NAME}_Unlocked.app"
+ENTITLEMENTS="${SCRIPT_DIR}/entitlements.plist"
+LOCAL_DYLIB="${SCRIPT_DIR}/libAntigravityTun.dylib"
+LOCAL_DYLIB_FALLBACK="${REPO_ROOT}/launcher/Resources/libAntigravityTun.dylib"
+LOCAL_CONFIG="${SCRIPT_DIR}/config.json"
+LOCAL_CONFIG_FALLBACK="${SCRIPT_DIR}/proxy_config.json.example"
 BUNDLE_DYLIB_REL="@executable_path/../Resources/libAntigravityTun.dylib"
 BUNDLE_CONFIG_REL="@executable_path/../Resources/proxy_config.json"
 
@@ -27,9 +31,13 @@ xattr -cr "$DEST_APP"
 
 echo "[*] Embedding proxy assets into app bundle..."
 if [ ! -f "$LOCAL_DYLIB" ]; then
-    echo "[Error] Missing dylib: $LOCAL_DYLIB"
-    echo "        Please run ./compile_without_xcode.sh first."
-    exit 1
+    if [ -f "$LOCAL_DYLIB_FALLBACK" ]; then
+        LOCAL_DYLIB="$LOCAL_DYLIB_FALLBACK"
+    else
+        echo "[Error] Missing dylib: $LOCAL_DYLIB"
+        echo "        Please run ./compile_without_xcode.sh first."
+        exit 1
+    fi
 fi
 
 cp "$LOCAL_DYLIB" "$DEST_APP/Contents/Resources/libAntigravityTun.dylib"

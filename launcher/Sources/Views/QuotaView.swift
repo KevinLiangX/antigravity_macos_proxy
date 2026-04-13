@@ -6,6 +6,8 @@ struct QuotaView: View {
     @EnvironmentObject private var quotaViewModel: QuotaViewModel
 
     @State private var showingLogoutConfirm = false
+    @State private var selectedAccountPickerId: String = ""
+    @State private var pollingToggle = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -27,9 +29,7 @@ struct QuotaView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    emptyStateView(message: "暂无账户，请先登录 Google 账户", actionTitle: "去登录") {
-                        authViewModel.login()
-                    }
+                    unauthenticatedEmptyState
                 }
             } else if quotaViewModel.uiStatus == .notLoggedIn && !authViewModel.accounts.isEmpty {
                 emptyStateView(message: "请先刷新配额数据", actionTitle: "刷新当前账户") {
@@ -129,19 +129,49 @@ struct QuotaView: View {
         .padding(24)
         .onAppear {
             authViewModel.reloadState()
-            quotaViewModel.loadCachedSnapshot(for: authViewModel.activeAccountId)
-            if authViewModel.activeAccountId != nil {
-                quotaViewModel.selectAccount(authViewModel.activeAccountId ?? "")
+            let initialAccountId = authViewModel.activeAccountId ?? ""
+            selectedAccountPickerId = initialAccountId
+            quotaViewModel.loadCachedSnapshot(for: initialAccountId.isEmpty ? nil : initialAccountId)
+            if !initialAccountId.isEmpty {
+                quotaViewModel.selectAccount(initialAccountId)
             }
+            pollingToggle = quotaViewModel.isPolling
             syncPollingWithSettings()
             appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
         }
         .onChange(of: authViewModel.activeAccountId) { newValue in
-            if let newValue, !newValue.isEmpty {
-                quotaViewModel.selectAccount(newValue)
+            let normalized = newValue ?? ""
+            if selectedAccountPickerId != normalized {
+                selectedAccountPickerId = normalized
+            }
+            if !normalized.isEmpty {
+                quotaViewModel.selectAccount(normalized)
             }
             syncPollingWithSettings()
             appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
+        }
+        .onChange(of: selectedAccountPickerId) { newId in
+            guard !newId.isEmpty else {
+                return
+            }
+            if authViewModel.activeAccountId != newId {
+                authViewModel.switchActiveAccount(to: newId)
+            }
+            quotaViewModel.selectAccount(newId)
+            syncPollingWithSettings()
+        }
+        .onChange(of: pollingToggle) { enabled in
+            if enabled {
+                let interval = max(5, appState.settingsDraft.quotaPollingIntervalSeconds)
+                quotaViewModel.startPolling(intervalSeconds: TimeInterval(interval))
+            } else {
+                quotaViewModel.stopPolling()
+            }
+        }
+        .onChange(of: quotaViewModel.isPolling) { isPolling in
+            if pollingToggle != isPolling {
+                pollingToggle = isPolling
+            }
         }
         .onChange(of: appState.settingsDraft.quotaAutoRefreshEnabled) { enabled in
             _ = enabled
@@ -197,20 +227,75 @@ struct QuotaView: View {
         }
     }
 
+    @ViewBuilder
+    private var unauthenticatedEmptyState: some View {
+        VStack(spacing: 16) {
+            Spacer()
+
+            Image(systemName: "chart.bar.doc.horizontal")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+
+            Text(needsOAuthSetup ? "缺少 OAuth 客户端配置，请先完成配置" : "暂无账户，请先登录 Google 账户")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if needsOAuthSetup {
+                Text("请前往「设置 > Google OAuth 登录」填写 Client ID / Client Secret，并点击“保存并应用参数”。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+            }
+
+            if let msg = authViewModel.errorMessage, !msg.isEmpty {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+            }
+
+            HStack(spacing: 10) {
+                if needsOAuthSetup {
+                    Button("去设置") {
+                        appState.selectedTab = .settings
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("已保存，去登录") {
+                        authViewModel.login()
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button("去登录") {
+                        authViewModel.login()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var needsOAuthSetup: Bool {
+        if !OAuthConstants.hasValidClientCredential {
+            return true
+        }
+
+        let message = authViewModel.errorMessage?.lowercased() ?? ""
+        return message.contains("invalid_client") || message.contains("客户端配置无效")
+    }
+
     private var accountSelector: some View {
         HStack(spacing: 12) {
             Text("当前账户")
                 .frame(width: 100, alignment: .leading)
 
-            Picker("", selection: Binding(
-                get: { authViewModel.activeAccountId ?? "" },
-                set: { newId in
-                    if !newId.isEmpty {
-                        authViewModel.switchActiveAccount(to: newId)
-                        quotaViewModel.selectAccount(newId)
-                    }
-                }
-            )) {
+            Picker("", selection: $selectedAccountPickerId) {
                 Text("未选择账户").tag("")
                 ForEach(authViewModel.accounts) { account in
                     Text(account.email).tag(account.id)
@@ -272,17 +357,7 @@ struct QuotaView: View {
 
                 Spacer()
 
-                Toggle(quotaViewModel.isPolling ? "停止自动刷新" : "开启自动刷新", isOn: Binding(
-                    get: { quotaViewModel.isPolling },
-                    set: { enabled in
-                        if enabled {
-                            let interval = max(5, appState.settingsDraft.quotaPollingIntervalSeconds)
-                            quotaViewModel.startPolling(intervalSeconds: TimeInterval(interval))
-                        } else {
-                            quotaViewModel.stopPolling()
-                        }
-                    }
-                ))
+                Toggle(quotaViewModel.isPolling ? "停止自动刷新" : "开启自动刷新", isOn: $pollingToggle)
                 .toggleStyle(.button)
                 .disabled(authViewModel.accounts.isEmpty)
             }

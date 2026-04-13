@@ -17,16 +17,63 @@ enum OAuthConstants {
         "https://www.googleapis.com/auth/experimentsandconfigs"
     ].joined(separator: " ")
 
-    // Fallback credentials aligned with AntigravityQuotaWatcherDesktop.
-    // Environment variables still take precedence for private deployments.
-    private static let defaultClientID = "YOUR_GOOGLE_CLIENT_ID_HERE"
-    private static let defaultClientSecret = "YOUR_GOOGLE_CLIENT_SECRET_HERE"
+    private static let placeholderClientID = "YOUR_GOOGLE_CLIENT_ID_HERE"
+    private static let placeholderClientSecret = "YOUR_GOOGLE_CLIENT_SECRET_HERE"
 
     static var clientID: String {
-        ProcessInfo.processInfo.environment["AG_GOOGLE_CLIENT_ID"] ?? defaultClientID
+        let env = ProcessInfo.processInfo.environment["AG_GOOGLE_CLIENT_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let env, !env.isEmpty {
+            return env
+        }
+
+        let saved = appSettingsCredential().id
+        if !saved.isEmpty {
+            return saved
+        }
+
+        return placeholderClientID
     }
 
     static var clientSecret: String {
-        ProcessInfo.processInfo.environment["AG_GOOGLE_CLIENT_SECRET"] ?? defaultClientSecret
+        let env = ProcessInfo.processInfo.environment["AG_GOOGLE_CLIENT_SECRET"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let env, !env.isEmpty {
+            return env
+        }
+
+        let saved = appSettingsCredential().secret
+        if !saved.isEmpty {
+            return saved
+        }
+
+        return placeholderClientSecret
+    }
+
+    static var hasValidClientCredential: Bool {
+        isValid(clientID) && isValid(clientSecret)
+    }
+
+    private static func isValid(_ raw: String) -> Bool {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            return false
+        }
+        if value == placeholderClientID || value == placeholderClientSecret {
+            return false
+        }
+        if value.hasPrefix("YOUR_GOOGLE_CLIENT_") {
+            return false
+        }
+        return true
+    }
+
+    private static func appSettingsCredential() -> (id: String, secret: String) {
+        guard let settings = try? AppSettingsService().load() else {
+            return ("", "")
+        }
+
+        return (
+            settings.googleOAuthClientID.trimmingCharacters(in: .whitespacesAndNewlines),
+            settings.googleOAuthClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
 }

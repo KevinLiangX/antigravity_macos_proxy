@@ -1,7 +1,17 @@
 import Foundation
 
+enum LauncherTab: Hashable {
+    case overview
+    case config
+    case quota
+    case diagnostics
+    case runtimeLogs
+    case settings
+}
+
 @MainActor
 final class LauncherAppState: ObservableObject {
+    @Published var selectedTab: LauncherTab = .overview
     @Published var status: AppStatus = .targetAppMissing
     @Published var appInfo: AppInfo?
     @Published var workflowItems: [LaunchWorkflowItem] = LaunchWorkflowStep.allCases.map {
@@ -72,7 +82,7 @@ final class LauncherAppState: ObservableObject {
                 case .missing:
                     status = .patchedAppMissing
                 case .ready:
-                    status = .patchedReady
+                    status = launchService.isPatchedAppRunning() ? .running : .patchedReady
                 case .outdated:
                     status = .patchedAppOutdated
                 case .repairRequired(let message):
@@ -87,7 +97,7 @@ final class LauncherAppState: ObservableObject {
         }
     }
 
-    func patchAndLaunch() {
+    func patchOnly() {
         guard !isRunningWorkflow else { return }
 
         Task {
@@ -103,7 +113,7 @@ final class LauncherAppState: ObservableObject {
 
         Task {
             do {
-                try await launchService.launchPatchedApp()
+                try await launchService.launchPatchedApp(settings: settingsDraft)
                 appendLog("启动成功！")
                 status = .running
             } catch {
@@ -114,14 +124,60 @@ final class LauncherAppState: ObservableObject {
         }
     }
 
+    func stopPatchedAppOnly() {
+        guard !isRunningWorkflow else { return }
+
+        appendLog("正在关闭修复版应用...")
+        launchService.stopManagedPatchedApp()
+
+        if launchService.isPatchedAppRunning() {
+            let message = "关闭失败：检测到修复版仍在运行"
+            appendLog(message)
+            status = .error(message)
+            return
+        }
+
+        appendLog("修复版已关闭")
+        refresh()
+    }
+
     func clearLogs() {
         logLines.removeAll()
+
+        let fm = FileManager.default
+        var clearedTargets: [String] = []
+
+        do {
+            if fm.fileExists(atPath: FileSystemPaths.patchLogFile.path) {
+                try fm.removeItem(at: FileSystemPaths.patchLogFile)
+                clearedTargets.append("修复日志")
+            }
+
+            if fm.fileExists(atPath: FileSystemPaths.runtimeLogsRoot.path) {
+                try fm.removeItem(at: FileSystemPaths.runtimeLogsRoot)
+                clearedTargets.append("运行日志目录")
+            }
+            try fm.createDirectory(at: FileSystemPaths.runtimeLogsRoot, withIntermediateDirectories: true)
+
+            let removedTmpLogs = clearTemporaryRuntimeLogs(fileManager: fm)
+            if removedTmpLogs > 0 {
+                clearedTargets.append("/tmp 运行日志 \(removedTmpLogs) 个")
+            }
+
+            if clearedTargets.isEmpty {
+                appendLog("日志已清理：未发现可删除的日志文件")
+            } else {
+                appendLog("日志已清理：\(clearedTargets.joined(separator: "、"))")
+            }
+        } catch {
+            appendLog("日志清理失败: \(error.localizedDescription)")
+        }
     }
 
     func cleanEnvironment() {
         guard !isRunningWorkflow else { return }
         
-        appendLog("开始清理运行环境...")
+        appendLog("开始清理运行环境（不含日志）...")
         status = .cleaning
         isRunningWorkflow = true
         
@@ -257,6 +313,10 @@ final class LauncherAppState: ObservableObject {
     func saveSettings() {
         do {
             settingsDraft.quotaPollingIntervalSeconds = max(5, settingsDraft.quotaPollingIntervalSeconds)
+            settingsDraft.googleOAuthClientID = settingsDraft.googleOAuthClientID
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            settingsDraft.googleOAuthClientSecret = settingsDraft.googleOAuthClientSecret
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             try settingsService.save(settingsDraft)
             settingsStatusMessage = "设置已保存"
             settingsErrorMessage = nil
@@ -419,7 +479,7 @@ final class LauncherAppState: ObservableObject {
         isRunningWorkflow = true
         resetWorkflow()
         status = .patching
-        appendLog("开始执行修复并启动流程")
+        appendLog("开始执行修复流程")
 
         do {
             markStep(.detect, as: .running)
@@ -471,21 +531,12 @@ final class LauncherAppState: ObservableObject {
             markStep(.verify, as: .completed)
             appendLog("修复结果验证通过")
 
-            if settingsDraft.launchAfterPatch {
-                markStep(.launch, as: .running)
-                status = .launching
-                try await self.launchService.launchPatchedApp()
-                markStep(.launch, as: .completed)
-                status = .running
-                appendLog("修复版已启动")
-            } else {
-                markStep(.launch, as: .completed, detail: "已跳过（设置为仅修复）")
-                status = .patchedReady
-                appendLog("已按设置跳过启动，可手动启动修复版")
-            }
+            markStep(.launch, as: .completed, detail: "待手动启动")
+            status = .patchedReady
+            appendLog("修复完成，可手动启动修复版")
         } catch {
             markCurrentRunningStepFailed(with: error.localizedDescription)
-            status = .error("修复或启动失败: \(error.localizedDescription)")
+            status = .error("修复失败: \(error.localizedDescription)")
             appendLog("失败: \(error.localizedDescription)")
             if settingsDraft.autoExportDiagnosticsOnFailure {
                 exportDiagnostics()
@@ -524,6 +575,33 @@ final class LauncherAppState: ObservableObject {
         guard let index = workflowItems.firstIndex(where: { $0.state == .running }) else { return }
         workflowItems[index].state = .failed
         workflowItems[index].detail = detail
+    }
+
+    private func clearTemporaryRuntimeLogs(fileManager: FileManager) -> Int {
+        let tmpURL = URL(fileURLWithPath: "/tmp", isDirectory: true)
+        guard let candidates = try? fileManager.contentsOfDirectory(
+            at: tmpURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        let runtimeLogs = candidates.filter {
+            $0.lastPathComponent.hasPrefix("antigravity_proxy") && $0.lastPathComponent.hasSuffix(".log")
+        }
+
+        var removedCount = 0
+        for logURL in runtimeLogs {
+            do {
+                try fileManager.removeItem(at: logURL)
+                removedCount += 1
+            } catch {
+                continue
+            }
+        }
+
+        return removedCount
     }
 
     private func appendLog(_ message: String) {

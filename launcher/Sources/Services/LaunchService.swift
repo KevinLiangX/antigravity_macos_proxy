@@ -14,7 +14,7 @@ final class LaunchService {
         }
     }
 
-    func launchPatchedApp() async throws {
+    func launchPatchedApp(settings: AppSettings? = nil) async throws {
         stopManagedPatchedApp()
 
         let dylibPath = FileSystemPaths.patchedApp
@@ -31,6 +31,21 @@ final class LaunchService {
         env["SUDisableAutomaticChecks"] = "YES"
         env["DYLD_INSERT_LIBRARIES"] = dylibPath
         env["ANTIGRAVITY_CONFIG"] = configPath
+
+        if settings?.enableRuntimeLog == true {
+            try FileManager.default.createDirectory(
+                at: FileSystemPaths.runtimeLogsRoot,
+                withIntermediateDirectories: true
+            )
+            env["ANTIGRAVITY_LOG_FILE"] = "1"
+            env["ANTIGRAVITY_LOG_LEVEL"] = settings?.runtimeLogLevel ?? "Info"
+            env["ANTIGRAVITY_LOG_PATH"] = FileSystemPaths.runtimeLogFile.path
+        } else {
+            env.removeValue(forKey: "ANTIGRAVITY_LOG_FILE")
+            env.removeValue(forKey: "ANTIGRAVITY_LOG_LEVEL")
+            env.removeValue(forKey: "ANTIGRAVITY_LOG_PATH")
+        }
+
         config.environment = env
         config.createsNewApplicationInstance = true
         config.promptsUserIfNeeded = false
@@ -87,6 +102,10 @@ final class LaunchService {
             _ = app.forceTerminate()
         }
         activeAppPID = nil
+    }
+
+    func isPatchedAppRunning() -> Bool {
+        !runningPatchedApps().isEmpty
     }
 
     func runtimeEnvironmentDescription() -> [String: String] {

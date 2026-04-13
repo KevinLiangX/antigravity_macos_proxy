@@ -2,13 +2,16 @@
 set -e
 
 # 获取脚本所在目录的绝对路径
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+DIR="$( cd "$( dirname "$0" )" && pwd )"
+REPO_ROOT="$( cd "$DIR/.." && pwd )"
 
 # 解锁版应用路径
 APP_PATH="${DIR}/Antigravity_Unlocked.app/Contents/MacOS/Electron"
 APP_RES_DIR="${DIR}/Antigravity_Unlocked.app/Contents/Resources"
 BUNDLE_DYLIB="${APP_RES_DIR}/libAntigravityTun.dylib"
 BUNDLE_CONFIG="${APP_RES_DIR}/proxy_config.json"
+LOCAL_DYLIB="${DIR}/libAntigravityTun.dylib"
+LOCAL_DYLIB_FALLBACK="${REPO_ROOT}/launcher/Resources/libAntigravityTun.dylib"
 
 if [ ! -f "$APP_PATH" ]; then
     echo "[Error] App executable not found at: $APP_PATH"
@@ -16,14 +19,18 @@ if [ ! -f "$APP_PATH" ]; then
     exit 1
 fi
 
-if [ ! -f "${DIR}/libAntigravityTun.dylib" ]; then
-    echo "[Error] Missing ${DIR}/libAntigravityTun.dylib"
-    echo "        Please run ./compile_without_xcode.sh first."
-    exit 1
+if [ ! -f "$LOCAL_DYLIB" ]; then
+    if [ -f "$LOCAL_DYLIB_FALLBACK" ]; then
+        LOCAL_DYLIB="$LOCAL_DYLIB_FALLBACK"
+    else
+        echo "[Error] Missing ${DIR}/libAntigravityTun.dylib"
+        echo "        Please run ./compile_without_xcode.sh first."
+        exit 1
+    fi
 fi
 
 mkdir -p "$APP_RES_DIR"
-cp "${DIR}/libAntigravityTun.dylib" "$BUNDLE_DYLIB"
+cp "$LOCAL_DYLIB" "$BUNDLE_DYLIB"
 if [ -f "${DIR}/config.json" ]; then
     cp "${DIR}/config.json" "$BUNDLE_CONFIG"
 elif [ -f "${DIR}/proxy_config.json.example" ]; then
