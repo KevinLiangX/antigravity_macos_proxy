@@ -1,6 +1,9 @@
 #pragma once
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <ctime>
+#include <cstdlib>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -37,11 +40,23 @@ public:
     const char *envFile = getenv("ANTIGRAVITY_LOG_FILE");
     s_fileLoggingEnabled = (envFile && (envFile[0] == '1' || envFile[0] == 't' || envFile[0] == 'T'));
 
+    const char *envLevel = getenv("ANTIGRAVITY_LOG_LEVEL");
+    if (envLevel != nullptr) {
+      SetLevelFromString(envLevel);
+    }
+
     if (!s_fileLoggingEnabled) {
       return; // 不启用文件日志，提升性能
     }
 
-    std::string logPath = path;
+    std::string logPath;
+    const char *envPath = getenv("ANTIGRAVITY_LOG_PATH");
+    if (envPath != nullptr && envPath[0] != '\0') {
+      logPath = envPath;
+    } else {
+      logPath = path;
+    }
+
     if (logPath.empty()) {
       // 默认路径，带上 pid 避免多进程冲突
       char buf[256];
@@ -51,14 +66,33 @@ public:
     
     // 以追加模式打开
     s_file = fopen(logPath.c_str(), "a");
+    if (s_file == nullptr) {
+      const char *tmpDir = getenv("TMPDIR");
+      if (tmpDir != nullptr && tmpDir[0] != '\0') {
+        std::string fallbackPath = tmpDir;
+        if (fallbackPath.back() != '/') {
+          fallbackPath.push_back('/');
+        }
+        fallbackPath += "antigravity_proxy." + std::to_string(getpid()) + ".log";
+        s_file = fopen(fallbackPath.c_str(), "a");
+      }
+    }
+
     if (s_file != nullptr) {
       // 设置行缓冲
       setvbuf(s_file, nullptr, _IOLBF, 0);
+    } else {
+      fprintf(stderr, "[antigravity] failed to open runtime log file\n");
     }
   }
 
   static void SetLevelFromString(const std::string &levelStr) {
     std::string lower = levelStr;
+    const char *envLevel = getenv("ANTIGRAVITY_LOG_LEVEL");
+    if (envLevel != nullptr && envLevel[0] != '\0') {
+      lower = envLevel;
+    }
+    
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return std::tolower(c); });
     
