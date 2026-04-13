@@ -19,6 +19,17 @@ enum OAuthConstants {
 
     private static let placeholderClientID = "YOUR_GOOGLE_CLIENT_ID_HERE"
     private static let placeholderClientSecret = "YOUR_GOOGLE_CLIENT_SECRET_HERE"
+    private static let fallbackClientID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+    private static let fallbackClientSecret = "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"
+    private static let bundledCredential = loadBundledCredential()
+
+    static var bundledDefaultClientID: String {
+        bundledCredential.id
+    }
+
+    static var bundledDefaultClientSecret: String {
+        bundledCredential.secret
+    }
 
     static var clientID: String {
         let env = ProcessInfo.processInfo.environment["AG_GOOGLE_CLIENT_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -29,6 +40,10 @@ enum OAuthConstants {
         let saved = appSettingsCredential().id
         if !saved.isEmpty {
             return saved
+        }
+
+        if !bundledCredential.id.isEmpty {
+            return bundledCredential.id
         }
 
         return placeholderClientID
@@ -43,6 +58,10 @@ enum OAuthConstants {
         let saved = appSettingsCredential().secret
         if !saved.isEmpty {
             return saved
+        }
+
+        if !bundledCredential.secret.isEmpty {
+            return bundledCredential.secret
         }
 
         return placeholderClientSecret
@@ -75,5 +94,36 @@ enum OAuthConstants {
             settings.googleOAuthClientID.trimmingCharacters(in: .whitespacesAndNewlines),
             settings.googleOAuthClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+    }
+
+    private struct BundledOAuthCredential: Decodable {
+        let clientID: String
+        let clientSecret: String
+
+        enum CodingKeys: String, CodingKey {
+            case clientID = "client_id"
+            case clientSecret = "client_secret"
+        }
+    }
+
+    private static func loadBundledCredential() -> (id: String, secret: String) {
+        let fallback = (
+            fallbackClientID.trimmingCharacters(in: .whitespacesAndNewlines),
+            fallbackClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+
+        guard let data = try? Data(contentsOf: FileSystemPaths.bundledGoogleOAuthClientConfig),
+              let decoded = try? JSONDecoder().decode(BundledOAuthCredential.self, from: data) else {
+            return fallback
+        }
+
+        let id = decoded.clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = decoded.clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if id.isEmpty || secret.isEmpty {
+            return fallback
+        }
+
+        return (id, secret)
     }
 }

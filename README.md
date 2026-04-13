@@ -73,13 +73,10 @@
 **定位：流量消耗与订阅看板**
 - **功能说明：** 对接服务后端，自动展示你当前节点的传输流量消耗情况、当日上限及总体使用额度。
 - **用户操作：** 纯看用，方便随时把握你的代理流量剩余状况。
-- **Client 配置：** 首次使用请前往设置页填写并保存 Google OAuth 的 `Client ID` 与 `Client Secret`。
-  ```json
-  {
-    "client_id": "<your-google-oauth-client-id>",
-    "client_secret": "<your-google-oauth-client-secret>"
-  }
-  ```
+- **Client 配置：** 安装后已内置默认 Google OAuth 的 `Client ID` 与 `Client Secret`，开箱即可登录；如需替换请前往设置页修改并保存。
+- **可选覆盖方式：**
+  1. 在设置页填写并保存你自己的 Client 配置；
+  2. 或设置环境变量 `AG_GOOGLE_CLIENT_ID` / `AG_GOOGLE_CLIENT_SECRET`（优先级最高）。
 - **如何获取 Client 信息（Google Cloud Console）：**
   1. 打开 Google Cloud Console，选择或创建项目。
   2. 进入 `APIs & Services` -> `OAuth consent screen`，完成应用信息配置。

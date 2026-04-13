@@ -9,6 +9,10 @@ struct QuotaView: View {
     @State private var selectedAccountPickerId: String = ""
     @State private var pollingToggle = false
 
+    private var isQuotaTabActive: Bool {
+        appState.selectedTab == .quota
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             headerSection
@@ -128,61 +132,90 @@ struct QuotaView: View {
         }
         .padding(24)
         .onAppear {
-            authViewModel.reloadState()
-            let initialAccountId = authViewModel.activeAccountId ?? ""
-            selectedAccountPickerId = initialAccountId
-            quotaViewModel.loadCachedSnapshot(for: initialAccountId.isEmpty ? nil : initialAccountId)
-            if !initialAccountId.isEmpty {
-                quotaViewModel.selectAccount(initialAccountId)
+            DispatchQueue.main.async {
+                authViewModel.reloadState()
+                let initialAccountId = authViewModel.activeAccountId ?? ""
+                selectedAccountPickerId = initialAccountId
+                quotaViewModel.loadCachedSnapshot(for: initialAccountId.isEmpty ? nil : initialAccountId)
+                if !initialAccountId.isEmpty {
+                    quotaViewModel.selectAccount(initialAccountId)
+                }
+                pollingToggle = quotaViewModel.isPolling
+                syncPollingWithSettingsDeferred()
+                updateQuotaDiagnosticsDeferred()
             }
-            pollingToggle = quotaViewModel.isPolling
-            syncPollingWithSettings()
-            appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
         }
         .onChange(of: authViewModel.activeAccountId) { newValue in
-            let normalized = newValue ?? ""
-            if selectedAccountPickerId != normalized {
-                selectedAccountPickerId = normalized
+            guard isQuotaTabActive else { return }
+            DispatchQueue.main.async {
+                let normalized = newValue ?? ""
+                if selectedAccountPickerId != normalized {
+                    selectedAccountPickerId = normalized
+                }
+                if !normalized.isEmpty {
+                    quotaViewModel.selectAccount(normalized)
+                }
+                syncPollingWithSettingsDeferred()
+                updateQuotaDiagnosticsDeferred()
             }
-            if !normalized.isEmpty {
-                quotaViewModel.selectAccount(normalized)
-            }
-            syncPollingWithSettings()
-            appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
         }
         .onChange(of: selectedAccountPickerId) { newId in
-            guard !newId.isEmpty else {
-                return
+            guard isQuotaTabActive else { return }
+            DispatchQueue.main.async {
+                guard !newId.isEmpty else {
+                    return
+                }
+                if authViewModel.activeAccountId != newId {
+                    authViewModel.switchActiveAccount(to: newId)
+                }
+                quotaViewModel.selectAccount(newId)
+                syncPollingWithSettingsDeferred()
             }
-            if authViewModel.activeAccountId != newId {
-                authViewModel.switchActiveAccount(to: newId)
-            }
-            quotaViewModel.selectAccount(newId)
-            syncPollingWithSettings()
         }
         .onChange(of: pollingToggle) { enabled in
-            if enabled {
-                let interval = max(5, appState.settingsDraft.quotaPollingIntervalSeconds)
-                quotaViewModel.startPolling(intervalSeconds: TimeInterval(interval))
-            } else {
-                quotaViewModel.stopPolling()
+            guard isQuotaTabActive else { return }
+            DispatchQueue.main.async {
+                if enabled {
+                    let interval = max(5, appState.settingsDraft.quotaPollingIntervalSeconds)
+                    quotaViewModel.startPolling(intervalSeconds: TimeInterval(interval))
+                } else {
+                    quotaViewModel.stopPolling()
+                }
             }
         }
         .onChange(of: quotaViewModel.isPolling) { isPolling in
-            if pollingToggle != isPolling {
-                pollingToggle = isPolling
+            guard isQuotaTabActive else { return }
+            DispatchQueue.main.async {
+                if pollingToggle != isPolling {
+                    pollingToggle = isPolling
+                }
             }
         }
         .onChange(of: appState.settingsDraft.quotaAutoRefreshEnabled) { enabled in
+            guard isQuotaTabActive else { return }
             _ = enabled
-            syncPollingWithSettings()
+            syncPollingWithSettingsDeferred()
         }
         .onChange(of: appState.settingsDraft.quotaPollingIntervalSeconds) { seconds in
+            guard isQuotaTabActive else { return }
             _ = seconds
-            syncPollingWithSettings()
+            syncPollingWithSettingsDeferred()
         }
         .onChange(of: quotaViewModel.uiStatus) { _ in
+            guard isQuotaTabActive else { return }
+            updateQuotaDiagnosticsDeferred()
+        }
+    }
+
+    private func updateQuotaDiagnosticsDeferred() {
+        DispatchQueue.main.async {
             appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
+        }
+    }
+
+    private func syncPollingWithSettingsDeferred() {
+        DispatchQueue.main.async {
+            syncPollingWithSettings()
         }
     }
 

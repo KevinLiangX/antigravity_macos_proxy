@@ -50,6 +50,10 @@ private struct OverviewView: View {
     @EnvironmentObject private var authViewModel: AuthViewModel
     @EnvironmentObject private var quotaViewModel: QuotaViewModel
 
+    private var isOverviewTabActive: Bool {
+        appState.selectedTab == .overview
+    }
+
     private var statusColor: Color {
         switch appState.status {
         case .running, .patchedReady:
@@ -332,20 +336,32 @@ private struct OverviewView: View {
         }
         .padding(24)
         .onAppear {
-            appState.refresh()
-            authViewModel.reloadState()
-            quotaViewModel.loadCachedSnapshot(for: authViewModel.activeAccountId)
-            quotaViewModel.selectAccount(authViewModel.activeAccountId ?? "")
-            appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
+            DispatchQueue.main.async {
+                appState.refresh()
+                authViewModel.reloadState()
+                quotaViewModel.loadCachedSnapshot(for: authViewModel.activeAccountId)
+                quotaViewModel.selectAccount(authViewModel.activeAccountId ?? "")
+                updateQuotaDiagnosticsDeferred()
+            }
         }
         .onChange(of: authViewModel.activeAccountId) { newValue in
-            if let newValue, !newValue.isEmpty {
-                quotaViewModel.loadCachedSnapshot(for: newValue)
-                quotaViewModel.selectAccount(newValue)
+            guard isOverviewTabActive else { return }
+            DispatchQueue.main.async {
+                if let newValue, !newValue.isEmpty {
+                    quotaViewModel.loadCachedSnapshot(for: newValue)
+                    quotaViewModel.selectAccount(newValue)
+                }
+                updateQuotaDiagnosticsDeferred()
             }
-            appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
         }
         .onChange(of: quotaViewModel.statusText) { _ in
+            guard isOverviewTabActive else { return }
+            updateQuotaDiagnosticsDeferred()
+        }
+    }
+
+    private func updateQuotaDiagnosticsDeferred() {
+        DispatchQueue.main.async {
             appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
         }
     }

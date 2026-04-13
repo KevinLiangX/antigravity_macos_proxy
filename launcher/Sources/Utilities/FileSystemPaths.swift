@@ -128,6 +128,11 @@ enum FileSystemPaths {
             ?? launcherRoot.appendingPathComponent("Resources/proxy_config.template.json")
     }
 
+    static var bundledGoogleOAuthClientConfig: URL {
+        bundleResourceURL(named: "google_oauth_client", withExtension: "json")
+            ?? launcherRoot.appendingPathComponent("Resources/google_oauth_client.json")
+    }
+
     static var bundledCompatibilityRegistry: URL? {
         bundleResourceURL(named: "compatibility", withExtension: "json")
             ?? bundleResourceURL(named: "compatibility", withExtension: "json", subdirectory: "Compatibility")

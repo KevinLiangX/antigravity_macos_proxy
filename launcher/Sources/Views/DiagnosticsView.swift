@@ -256,7 +256,9 @@ struct DiagnosticsView: View {
             .padding(24)
         }
         .onAppear {
-            appState.reloadDiagnosticsHistory()
+            DispatchQueue.main.async {
+                appState.reloadDiagnosticsHistory()
+            }
         }
     }
 }

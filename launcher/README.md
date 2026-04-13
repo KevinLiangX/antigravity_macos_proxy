@@ -252,10 +252,12 @@ bash scripts/phase6_validation.sh
 
 ## Google OAuth 团队内置配置
 
-当团队不希望每个人都单独填写 Client ID / Client Secret 时，可在仓库内置一份共享配置：
+仓库已内置一份共享 Google OAuth 配置，安装后可直接在设置页看到默认 `Client ID` / `Client Secret` 并用于登录。
+
+如需替换为你自己的配置：
 
 1. 编辑 `launcher/Resources/google_oauth_client.json`
-2. 写入真实的 Google OAuth 客户端信息：
+2. 写入你的 Google OAuth 客户端信息：
 
 ```json
 {

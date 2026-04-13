@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: LauncherAppState
+    @State private var revealGoogleClientSecret = false
 
     var body: some View {
         ScrollView {
@@ -96,11 +97,23 @@ struct SettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                         }
 
-                        HStack {
+                        HStack(spacing: 8) {
                             Text("Client Secret")
                                 .frame(width: 100, alignment: .leading)
-                            SecureField("填写 Google OAuth Client Secret", text: $appState.settingsDraft.googleOAuthClientSecret)
+
+                            Group {
+                                if revealGoogleClientSecret {
+                                    TextField("填写 Google OAuth Client Secret", text: $appState.settingsDraft.googleOAuthClientSecret)
+                                } else {
+                                    SecureField("填写 Google OAuth Client Secret", text: $appState.settingsDraft.googleOAuthClientSecret)
+                                }
+                            }
                                 .textFieldStyle(.roundedBorder)
+
+                            Button(revealGoogleClientSecret ? "隐藏" : "显示") {
+                                revealGoogleClientSecret.toggle()
+                            }
+                            .buttonStyle(.bordered)
                         }
 
                         Text("说明：若同时设置了环境变量 AG_GOOGLE_CLIENT_ID / AG_GOOGLE_CLIENT_SECRET，环境变量优先。")
@@ -309,7 +322,9 @@ struct SettingsView: View {
             .padding(24)
         }
         .onAppear {
-            appState.loadSettings()
+            DispatchQueue.main.async {
+                appState.loadSettings()
+            }
         }
     }
 }

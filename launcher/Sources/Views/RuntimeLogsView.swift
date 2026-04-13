@@ -85,37 +85,30 @@ struct RuntimeLogsView: View {
         DispatchQueue.global(qos: .userInitiated).async {
             let fileManager = FileManager.default
             let preferredLog = FileSystemPaths.runtimeLogFile
-            
-            do {
-                if fileManager.fileExists(atPath: preferredLog.path) {
-                    let content = readLastBytes(of: preferredLog.path, maxBytes: maxReadBytes)
-                    DispatchQueue.main.async {
-                        self.currentLogPath = preferredLog.path
-                        self.logContent = content
-                    }
-                    return
-                }
 
-                guard let newestLog = findNewestTmpLog(fileManager: fileManager) else {
-                    DispatchQueue.main.async {
-                        self.currentLogPath = "未找到日志文件"
-                        self.logContent = "暂无日志。已检查:\n\(preferredLog.path)\n/tmp/antigravity_proxy*.log"
-                    }
-                    return
-                }
-                
-                let path = newestLog.path
-                let content = readLastBytes(of: path, maxBytes: maxReadBytes)
-                
+            if fileManager.fileExists(atPath: preferredLog.path) {
+                let content = readLastBytes(of: preferredLog.path, maxBytes: maxReadBytes)
                 DispatchQueue.main.async {
-                    self.currentLogPath = path
+                    self.currentLogPath = preferredLog.path
                     self.logContent = content
                 }
-            } catch {
+                return
+            }
+
+            guard let newestLog = findNewestTmpLog(fileManager: fileManager) else {
                 DispatchQueue.main.async {
-                    self.currentLogPath = "读取日志目录失败"
-                    self.logContent = "Error: \(error.localizedDescription)"
+                    self.currentLogPath = "未找到日志文件"
+                    self.logContent = "暂无日志。已检查:\n\(preferredLog.path)\n/tmp/antigravity_proxy*.log"
                 }
+                return
+            }
+
+            let path = newestLog.path
+            let content = readLastBytes(of: path, maxBytes: maxReadBytes)
+
+            DispatchQueue.main.async {
+                self.currentLogPath = path
+                self.logContent = content
             }
         }
     }

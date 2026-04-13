@@ -179,10 +179,14 @@ struct ConfigView: View {
             .padding(24)
         }
         .onAppear {
-            appState.loadProxyConfigIfNeeded()
+            DispatchQueue.main.async {
+                appState.loadProxyConfigIfNeeded()
+            }
         }
         .onDisappear {
-            appState.clearConfigStatusMessage()
+            DispatchQueue.main.async {
+                appState.clearConfigStatusMessage()
+            }
         }
     }
 }

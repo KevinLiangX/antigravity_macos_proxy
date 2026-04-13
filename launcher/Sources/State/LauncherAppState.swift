@@ -239,7 +239,9 @@ final class LauncherAppState: ObservableObject {
     }
 
     func updateQuotaDiagnostics(_ diagnostics: [String: String]) {
-        quotaDiagnostics = diagnostics
+        if quotaDiagnostics != diagnostics {
+            quotaDiagnostics = diagnostics
+        }
     }
 
     func loadProxyConfig() {
@@ -301,7 +303,17 @@ final class LauncherAppState: ObservableObject {
 
     func loadSettings() {
         do {
-            settingsDraft = try settingsService.load()
+            var loadedSettings = try settingsService.load()
+
+            if loadedSettings.googleOAuthClientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                loadedSettings.googleOAuthClientID = OAuthConstants.bundledDefaultClientID
+            }
+
+            if loadedSettings.googleOAuthClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                loadedSettings.googleOAuthClientSecret = OAuthConstants.bundledDefaultClientSecret
+            }
+
+            settingsDraft = loadedSettings
             settingsErrorMessage = nil
             checkLauncherUpdates(manual: false)
         } catch {
