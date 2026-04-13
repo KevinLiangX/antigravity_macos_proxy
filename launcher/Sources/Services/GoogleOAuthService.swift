@@ -4,6 +4,7 @@ import Foundation
 
 enum GoogleOAuthError: Error {
     case missingClientCredential
+    case invalidClientCredential(String)
     case callbackServerUnavailable
     case openBrowserFailed(String)
     case invalidTokenResponse
@@ -18,7 +19,12 @@ extension GoogleOAuthError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingClientCredential:
-            return "Missing AG_GOOGLE_CLIENT_ID or AG_GOOGLE_CLIENT_SECRET in environment."
+            return "缺少有效的 Google OAuth 凭据。请在设置页填写 Client ID / Client Secret，或设置环境变量 AG_GOOGLE_CLIENT_ID / AG_GOOGLE_CLIENT_SECRET，或在 \(OAuthConstants.teamSharedCredentialFilePath) 内置团队凭据。"
+        case .invalidClientCredential(let detail):
+            if detail.isEmpty {
+                return "Google OAuth 客户端配置无效（invalid_client）。请检查 Client ID / Client Secret 是否正确。"
+            }
+            return "Google OAuth 客户端配置无效（invalid_client）：\(detail)"
         case .callbackServerUnavailable:
             return "OAuth callback server is unavailable."
         case .openBrowserFailed(let authURL):
@@ -46,6 +52,11 @@ struct LoginFlowInfo: Equatable {
 }
 
 final class GoogleOAuthService {
+    private struct OAuthErrorResponse: Decodable {
+        let error: String?
+        let error_description: String?
+    }
+
     private struct TokenResponse: Decodable {
         let access_token: String
         let refresh_token: String?
@@ -102,7 +113,7 @@ final class GoogleOAuthService {
     }
 
     func login() async throws -> GoogleAccount {
-        guard !OAuthConstants.clientID.isEmpty, !OAuthConstants.clientSecret.isEmpty else {
+        guard OAuthConstants.hasValidClientCredential else {
             authState = .error(GoogleOAuthError.missingClientCredential.localizedDescription)
             throw GoogleOAuthError.missingClientCredential
         }
@@ -276,6 +287,10 @@ final class GoogleOAuthService {
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+            let oauthError = parseOAuthError(from: data)
+            if oauthError.code == "invalid_client" {
+                throw GoogleOAuthError.invalidClientCredential(oauthError.description)
+            }
             throw GoogleOAuthError.invalidTokenResponse
         }
 
@@ -311,6 +326,11 @@ final class GoogleOAuthService {
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+            let oauthError = parseOAuthError(from: data)
+            if oauthError.code == "invalid_client" {
+                authState = .error(GoogleOAuthError.invalidClientCredential(oauthError.description).localizedDescription)
+                throw GoogleOAuthError.invalidClientCredential(oauthError.description)
+            }
             authState = .tokenExpired
             throw GoogleOAuthError.invalidTokenResponse
         }
@@ -355,5 +375,15 @@ final class GoogleOAuthService {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+
+    private func parseOAuthError(from data: Data) -> (code: String, description: String) {
+        guard let decoded = try? JSONDecoder().decode(OAuthErrorResponse.self, from: data) else {
+            return ("", "")
+        }
+
+        let code = decoded.error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let description = decoded.error_description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (code, description)
     }
 }

@@ -160,21 +160,21 @@ final class PatchService {
     }
 
     private func resolveDylibSource() throws -> URL {
-        if FileManager.default.fileExists(atPath: FileSystemPaths.bundledDylib.path) {
-            return FileSystemPaths.bundledDylib
-        }
-        if FileManager.default.fileExists(atPath: FileSystemPaths.fallbackProxyRepoDylib.path) {
-            return FileSystemPaths.fallbackProxyRepoDylib
+        let fm = FileManager.default
+        for candidate in FileSystemPaths.runtimeDylibCandidates {
+            if fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
         }
         throw PatchServiceError.runtimeAssetMissing("libAntigravityTun.dylib")
     }
 
     private func resolveEntitlementsSource() throws -> URL {
-        if FileManager.default.fileExists(atPath: FileSystemPaths.bundledEntitlements.path) {
-            return FileSystemPaths.bundledEntitlements
-        }
-        if FileManager.default.fileExists(atPath: FileSystemPaths.fallbackProxyRepoEntitlements.path) {
-            return FileSystemPaths.fallbackProxyRepoEntitlements
+        let fm = FileManager.default
+        for candidate in FileSystemPaths.entitlementsCandidates {
+            if fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
         }
         throw PatchServiceError.runtimeAssetMissing("entitlements.plist")
     }

@@ -250,6 +250,26 @@ Phase 6 核心链路验证脚本：
 bash scripts/phase6_validation.sh
 ```
 
+## Google OAuth 团队内置配置
+
+当团队不希望每个人都单独填写 Client ID / Client Secret 时，可在仓库内置一份共享配置：
+
+1. 编辑 `launcher/Resources/google_oauth_client.json`
+2. 写入真实的 Google OAuth 客户端信息：
+
+```json
+{
+	"client_id": "<your-client-id>",
+	"client_secret": "<your-client-secret>"
+}
+```
+
+加载优先级（高 -> 低）：
+
+1. 环境变量：`AG_GOOGLE_CLIENT_ID` / `AG_GOOGLE_CLIENT_SECRET`
+2. 设置页保存值
+3. `launcher/Resources/google_oauth_client.json`（团队内置）
+
 ## 下一步建议
 
 1. 完成 Phase 6 测试清单与执行记录（正向/异常/回滚）。

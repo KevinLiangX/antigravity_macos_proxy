@@ -89,13 +89,20 @@ enum FileSystemPaths {
     static let patchLogFile = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/AntigravityProxy/patch.log")
 
+    static let runtimeLogsRoot = appSupportRoot
+        .appendingPathComponent("runtime_logs", isDirectory: true)
+
+    static let runtimeLogFile = runtimeLogsRoot
+        .appendingPathComponent("antigravity_proxy.log")
+
     static var requiredRuntimeDirectories: [URL] {
         [
             appSupportRoot,
             metadataRoot,
             userConfigRoot,
             diagnosticsRoot,
-            patchLogFile.deletingLastPathComponent()
+            patchLogFile.deletingLastPathComponent(),
+            runtimeLogsRoot
         ]
     }
 
@@ -133,5 +140,33 @@ enum FileSystemPaths {
 
     static var fallbackProxyRepoEntitlements: URL {
         siblingProxyRepoRoot.appendingPathComponent("entitlements.plist")
+    }
+
+    static var legacyScriptsRoot: URL {
+        projectRoot.appendingPathComponent("legacy_scripts", isDirectory: true)
+    }
+
+    static var legacyScriptsDylib: URL {
+        legacyScriptsRoot.appendingPathComponent("libAntigravityTun.dylib")
+    }
+
+    static var legacyScriptsEntitlements: URL {
+        legacyScriptsRoot.appendingPathComponent("entitlements.plist")
+    }
+
+    static var runtimeDylibCandidates: [URL] {
+        [
+            bundledDylib,
+            legacyScriptsDylib,
+            fallbackProxyRepoDylib
+        ]
+    }
+
+    static var entitlementsCandidates: [URL] {
+        [
+            bundledEntitlements,
+            legacyScriptsEntitlements,
+            fallbackProxyRepoEntitlements
+        ]
     }
 }

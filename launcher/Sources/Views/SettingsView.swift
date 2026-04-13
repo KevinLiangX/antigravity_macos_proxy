@@ -36,9 +36,6 @@ struct SettingsView: View {
 
                         Toggle("修复失败时自动导出诊断包", isOn: $appState.settingsDraft.autoExportDiagnosticsOnFailure)
                             .toggleStyle(.switch)
-                        
-                        Toggle("修复完成后自动启动应用", isOn: $appState.settingsDraft.launchAfterPatch)
-                            .toggleStyle(.switch)
                     }
                     .padding(20)
                     .background(Color.gray.opacity(0.06))
@@ -72,6 +69,43 @@ struct SettingsView: View {
                                 .frame(maxWidth: 160)
                                 .disabled(!appState.settingsDraft.quotaAutoRefreshEnabled)
                         }
+                    }
+                    .padding(20)
+                    .background(Color.gray.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+                    )
+
+                    // Google OAuth 凭据卡片
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Image(systemName: "person.badge.key")
+                                .foregroundStyle(.mint)
+                            Text("Google OAuth 登录")
+                                .font(.headline)
+                        }
+
+                        Divider()
+
+                        HStack {
+                            Text("Client ID")
+                                .frame(width: 100, alignment: .leading)
+                            TextField("填写 Google OAuth Client ID", text: $appState.settingsDraft.googleOAuthClientID)
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        HStack {
+                            Text("Client Secret")
+                                .frame(width: 100, alignment: .leading)
+                            SecureField("填写 Google OAuth Client Secret", text: $appState.settingsDraft.googleOAuthClientSecret)
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        Text("说明：若同时设置了环境变量 AG_GOOGLE_CLIENT_ID / AG_GOOGLE_CLIENT_SECRET，环境变量优先。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(20)
                     .background(Color.gray.opacity(0.06))
@@ -191,6 +225,32 @@ struct SettingsView: View {
                             Text(error)
                                 .font(.caption)
                                 .foregroundStyle(.red)
+                        }
+                    }
+                    .padding(20)
+                    .background(Color.gray.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+                    )
+
+                    // 运行日志 (Run Logs) 卡片
+                    VStack(alignment: .leading, spacing: 16) {
+                        Section(header: Text("运行日志 (Run Logs)").font(.headline)) {
+                            Divider()
+                            
+                            Toggle("启用运行日志日志", isOn: $appState.settingsDraft.enableRuntimeLog)
+                                .toggleStyle(.switch)
+
+                            Picker("日志等级", selection: $appState.settingsDraft.runtimeLogLevel) {
+                                Text("Debug").tag("Debug")
+                                Text("Info").tag("Info")
+                                Text("Warn").tag("Warn")
+                                Text("Error").tag("Error")
+                            }
+
+                            Stepper("刷新时间: \(appState.settingsDraft.runtimeLogRefreshInterval) 秒", value: $appState.settingsDraft.runtimeLogRefreshInterval, in: 1...60)
                         }
                     }
                     .padding(20)

@@ -2,72 +2,93 @@ import Foundation
 
 struct AppSettings: Codable, Equatable {
     var autoExportDiagnosticsOnFailure: Bool
-    var launchAfterPatch: Bool
     var quotaAutoRefreshEnabled: Bool
     var quotaPollingIntervalSeconds: Int
+    var googleOAuthClientID: String
+    var googleOAuthClientSecret: String
     var compatibilityRulesURL: String
     var compatibilityTrustedHosts: String
     var compatibilityExpectedSHA256: String
     var releaseFeedURL: String
     var releaseFeedTrustedHosts: String
     var releaseIgnoredVersion: String
+    var enableRuntimeLog: Bool
+    var runtimeLogRefreshInterval: Int
+    var runtimeLogLevel: String
 
     static let `default` = AppSettings(
         autoExportDiagnosticsOnFailure: true,
-        launchAfterPatch: true,
         quotaAutoRefreshEnabled: false,
         quotaPollingIntervalSeconds: 60,
+        googleOAuthClientID: "",
+        googleOAuthClientSecret: "",
         compatibilityRulesURL: "",
         compatibilityTrustedHosts: "githubusercontent.com, raw.githubusercontent.com",
         compatibilityExpectedSHA256: "",
         releaseFeedURL: "",
         releaseFeedTrustedHosts: "githubusercontent.com, raw.githubusercontent.com",
-        releaseIgnoredVersion: ""
+        releaseIgnoredVersion: "",
+        enableRuntimeLog: false,
+        runtimeLogRefreshInterval: 5,
+        runtimeLogLevel: "Info"
     )
 
     enum CodingKeys: String, CodingKey {
         case autoExportDiagnosticsOnFailure
-        case launchAfterPatch
         case quotaAutoRefreshEnabled
         case quotaPollingIntervalSeconds
+        case googleOAuthClientID
+        case googleOAuthClientSecret
         case compatibilityRulesURL
         case compatibilityTrustedHosts
         case compatibilityExpectedSHA256
         case releaseFeedURL
         case releaseFeedTrustedHosts
         case releaseIgnoredVersion
+        case enableRuntimeLog
+        case runtimeLogRefreshInterval
+        case runtimeLogLevel
     }
 
     init(
         autoExportDiagnosticsOnFailure: Bool,
-        launchAfterPatch: Bool,
         quotaAutoRefreshEnabled: Bool,
         quotaPollingIntervalSeconds: Int,
+        googleOAuthClientID: String,
+        googleOAuthClientSecret: String,
         compatibilityRulesURL: String,
         compatibilityTrustedHosts: String,
         compatibilityExpectedSHA256: String,
         releaseFeedURL: String,
         releaseFeedTrustedHosts: String,
-        releaseIgnoredVersion: String
+        releaseIgnoredVersion: String,
+        enableRuntimeLog: Bool,
+        runtimeLogRefreshInterval: Int,
+        runtimeLogLevel: String
     ) {
         self.autoExportDiagnosticsOnFailure = autoExportDiagnosticsOnFailure
-        self.launchAfterPatch = launchAfterPatch
         self.quotaAutoRefreshEnabled = quotaAutoRefreshEnabled
         self.quotaPollingIntervalSeconds = quotaPollingIntervalSeconds
+        self.googleOAuthClientID = googleOAuthClientID
+        self.googleOAuthClientSecret = googleOAuthClientSecret
         self.compatibilityRulesURL = compatibilityRulesURL
         self.compatibilityTrustedHosts = compatibilityTrustedHosts
         self.compatibilityExpectedSHA256 = compatibilityExpectedSHA256
         self.releaseFeedURL = releaseFeedURL
         self.releaseFeedTrustedHosts = releaseFeedTrustedHosts
         self.releaseIgnoredVersion = releaseIgnoredVersion
+        self.enableRuntimeLog = enableRuntimeLog
+        self.runtimeLogRefreshInterval = runtimeLogRefreshInterval
+        self.runtimeLogLevel = runtimeLogLevel
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         autoExportDiagnosticsOnFailure = try container.decodeIfPresent(Bool.self, forKey: .autoExportDiagnosticsOnFailure) ?? true
-        launchAfterPatch = try container.decodeIfPresent(Bool.self, forKey: .launchAfterPatch) ?? true
         quotaAutoRefreshEnabled = try container.decodeIfPresent(Bool.self, forKey: .quotaAutoRefreshEnabled) ?? false
         quotaPollingIntervalSeconds = max(5, try container.decodeIfPresent(Int.self, forKey: .quotaPollingIntervalSeconds) ?? 60)
+        googleOAuthClientID = try container.decodeIfPresent(String.self, forKey: .googleOAuthClientID) ?? ""
+        googleOAuthClientSecret = try container.decodeIfPresent(String.self, forKey: .googleOAuthClientSecret) ?? ""
         compatibilityRulesURL = try container.decodeIfPresent(String.self, forKey: .compatibilityRulesURL) ?? ""
         compatibilityTrustedHosts = try container.decodeIfPresent(String.self, forKey: .compatibilityTrustedHosts)
             ?? "githubusercontent.com, raw.githubusercontent.com"
@@ -76,5 +97,8 @@ struct AppSettings: Codable, Equatable {
         releaseFeedTrustedHosts = try container.decodeIfPresent(String.self, forKey: .releaseFeedTrustedHosts)
             ?? "githubusercontent.com, raw.githubusercontent.com"
         releaseIgnoredVersion = try container.decodeIfPresent(String.self, forKey: .releaseIgnoredVersion) ?? ""
+        enableRuntimeLog = try container.decodeIfPresent(Bool.self, forKey: .enableRuntimeLog) ?? false
+        runtimeLogRefreshInterval = max(1, try container.decodeIfPresent(Int.self, forKey: .runtimeLogRefreshInterval) ?? 5)
+        runtimeLogLevel = try container.decodeIfPresent(String.self, forKey: .runtimeLogLevel) ?? "Info"
     }
 }

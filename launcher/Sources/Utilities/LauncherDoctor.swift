@@ -8,6 +8,7 @@ struct LauncherDoctor {
     private let patch = PatchService()
     private let migration = MigrationService()
     private let launch = LaunchService()
+    private let settingsService = AppSettingsService()
 
     func run() -> Int32 {
         print("=== Antigravity Proxy Launcher Doctor ===")
@@ -44,14 +45,16 @@ struct LauncherDoctor {
             return failure.codeValue
         }
 
-        let dylibExists = FileManager.default.fileExists(atPath: FileSystemPaths.bundledDylib.path)
-            || FileManager.default.fileExists(atPath: FileSystemPaths.fallbackProxyRepoDylib.path)
-        print("Dylib 资源: \(dylibExists ? "已找到" : "缺失")")
-
-        if !dylibExists {
+        let dylibSource = FileSystemPaths.runtimeDylibCandidates.first {
+            FileManager.default.fileExists(atPath: $0.path)
+        }
+        if let dylibSource {
+            print("Dylib 资源: 已找到 (\(dylibSource.path))")
+        } else {
+            print("Dylib 资源: 缺失")
             let failure = LauncherFailure(code: .runtimeAssetMissing, message: "libAntigravityTun.dylib 缺失")
             print("错误: \(failure.formatted)")
-            print("建议: 放置 libAntigravityTun.dylib 到 launcher/Resources 或兄弟仓库 antigravity_macos_proxy/")
+            print("建议: 运行 legacy_scripts/compile_without_xcode.sh，或放置到 launcher/Resources、legacy_scripts")
             return failure.codeValue
         }
 
@@ -118,7 +121,8 @@ struct LauncherDoctor {
 
             print("[4/4] 启动修复版")
             try runAsyncBlocking {
-                try await launch.launchPatchedApp()
+                let settings = try? settingsService.load()
+                try await launch.launchPatchedApp(settings: settings)
             }
 
             print("CLI 全流程执行成功")

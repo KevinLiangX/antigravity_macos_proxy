@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct QuotaView: View {
@@ -27,9 +28,7 @@ struct QuotaView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    emptyStateView(message: "暂无账户，请先登录 Google 账户", actionTitle: "去登录") {
-                        authViewModel.login()
-                    }
+                    unauthenticatedEmptyState
                 }
             } else if quotaViewModel.uiStatus == .notLoggedIn && !authViewModel.accounts.isEmpty {
                 emptyStateView(message: "请先刷新配额数据", actionTitle: "刷新当前账户") {
@@ -194,6 +193,89 @@ struct QuotaView: View {
                 .foregroundStyle(.secondary)
                 .padding(.leading, 32)
                 .padding(.bottom, 8)
+        }
+    }
+
+    @ViewBuilder
+    private var unauthenticatedEmptyState: some View {
+        VStack(spacing: 16) {
+            Spacer()
+
+            Image(systemName: "chart.bar.doc.horizontal")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+
+            Text(needsOAuthSetup ? "缺少 OAuth 客户端配置，请先完成配置" : "暂无账户，请先登录 Google 账户")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if needsOAuthSetup {
+                Text("配置文件: \(OAuthConstants.teamSharedCredentialFilePath)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+            }
+
+            if let msg = authViewModel.errorMessage, !msg.isEmpty {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+            }
+
+            HStack(spacing: 10) {
+                if needsOAuthSetup {
+                    Button("打开 OAuth 配置") {
+                        openTeamOAuthConfigFile()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("已配置，重新登录") {
+                        authViewModel.login()
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Button("去登录") {
+                        authViewModel.login()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var needsOAuthSetup: Bool {
+        if !OAuthConstants.hasValidClientCredential {
+            return true
+        }
+
+        let message = authViewModel.errorMessage?.lowercased() ?? ""
+        return message.contains("invalid_client") || message.contains("客户端配置无效")
+    }
+
+    private func openTeamOAuthConfigFile() {
+        let configURL = OAuthConstants.teamSharedCredentialFileURL
+        let configDirectory = configURL.deletingLastPathComponent()
+        let fm = FileManager.default
+
+        if !fm.fileExists(atPath: configDirectory.path) {
+            try? fm.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        }
+
+        if !fm.fileExists(atPath: configURL.path) {
+            let template = "{\n  \"client_id\": \"\",\n  \"client_secret\": \"\"\n}\n"
+            try? template.data(using: .utf8)?.write(to: configURL, options: .atomic)
+        }
+
+        if !NSWorkspace.shared.open(configURL) {
+            NSWorkspace.shared.activateFileViewerSelecting([configURL])
         }
     }
 

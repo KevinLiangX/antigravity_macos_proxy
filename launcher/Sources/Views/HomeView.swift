@@ -24,6 +24,11 @@ struct HomeView: View {
                     Label("诊断", systemImage: "stethoscope")
                 }
 
+            RuntimeLogsView()
+                .tabItem {
+                    Label("运行日志", systemImage: "text.alignleft")
+                }
+
             SettingsView()
                 .tabItem {
                     Label("设置", systemImage: "gearshape")
@@ -203,7 +208,20 @@ private struct OverviewView: View {
                 .keyboardShortcut("r", modifiers: [.command])
                 .disabled(appState.isRunningWorkflow)
 
-                if appState.status == .patchedReady || appState.status == .running {
+                if appState.status == .running {
+                    Button("关闭修复版应用") {
+                        appState.stopPatchedAppOnly()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .disabled(appState.isRunningWorkflow)
+
+                    Button("修复应用") {
+                        appState.patchOnly()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(appState.isRunningWorkflow)
+                } else if appState.status == .patchedReady {
                     Button("启动应用") {
                         appState.launchPatchedAppOnly()
                     }
@@ -211,14 +229,14 @@ private struct OverviewView: View {
                     .tint(.green)
                     .disabled(appState.isRunningWorkflow)
 
-                    Button("修复并启动") {
-                        appState.patchAndLaunch()
+                    Button("修复应用") {
+                        appState.patchOnly()
                     }
                     .buttonStyle(.bordered)
                     .disabled(appState.isRunningWorkflow)
                 } else {
-                    Button("修复并启动") {
-                        appState.patchAndLaunch()
+                    Button("修复应用") {
+                        appState.patchOnly()
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(appState.isRunningWorkflow)
@@ -229,7 +247,7 @@ private struct OverviewView: View {
                 }
                 .disabled(appState.isRunningWorkflow)
 
-                Button("清空日志") {
+                Button("清理日志") {
                     appState.clearLogs()
                 }
 
