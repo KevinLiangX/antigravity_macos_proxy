@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct QuotaView: View {
@@ -7,6 +6,8 @@ struct QuotaView: View {
     @EnvironmentObject private var quotaViewModel: QuotaViewModel
 
     @State private var showingLogoutConfirm = false
+    @State private var selectedAccountPickerId: String = ""
+    @State private var pollingToggle = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -128,19 +129,49 @@ struct QuotaView: View {
         .padding(24)
         .onAppear {
             authViewModel.reloadState()
-            quotaViewModel.loadCachedSnapshot(for: authViewModel.activeAccountId)
-            if authViewModel.activeAccountId != nil {
-                quotaViewModel.selectAccount(authViewModel.activeAccountId ?? "")
+            let initialAccountId = authViewModel.activeAccountId ?? ""
+            selectedAccountPickerId = initialAccountId
+            quotaViewModel.loadCachedSnapshot(for: initialAccountId.isEmpty ? nil : initialAccountId)
+            if !initialAccountId.isEmpty {
+                quotaViewModel.selectAccount(initialAccountId)
             }
+            pollingToggle = quotaViewModel.isPolling
             syncPollingWithSettings()
             appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
         }
         .onChange(of: authViewModel.activeAccountId) { newValue in
-            if let newValue, !newValue.isEmpty {
-                quotaViewModel.selectAccount(newValue)
+            let normalized = newValue ?? ""
+            if selectedAccountPickerId != normalized {
+                selectedAccountPickerId = normalized
+            }
+            if !normalized.isEmpty {
+                quotaViewModel.selectAccount(normalized)
             }
             syncPollingWithSettings()
             appState.updateQuotaDiagnostics(quotaViewModel.diagnosticsSummary)
+        }
+        .onChange(of: selectedAccountPickerId) { newId in
+            guard !newId.isEmpty else {
+                return
+            }
+            if authViewModel.activeAccountId != newId {
+                authViewModel.switchActiveAccount(to: newId)
+            }
+            quotaViewModel.selectAccount(newId)
+            syncPollingWithSettings()
+        }
+        .onChange(of: pollingToggle) { enabled in
+            if enabled {
+                let interval = max(5, appState.settingsDraft.quotaPollingIntervalSeconds)
+                quotaViewModel.startPolling(intervalSeconds: TimeInterval(interval))
+            } else {
+                quotaViewModel.stopPolling()
+            }
+        }
+        .onChange(of: quotaViewModel.isPolling) { isPolling in
+            if pollingToggle != isPolling {
+                pollingToggle = isPolling
+            }
         }
         .onChange(of: appState.settingsDraft.quotaAutoRefreshEnabled) { enabled in
             _ = enabled
@@ -211,10 +242,9 @@ struct QuotaView: View {
                 .multilineTextAlignment(.center)
 
             if needsOAuthSetup {
-                Text("配置文件: \(OAuthConstants.teamSharedCredentialFilePath)")
+                Text("请前往「设置 > Google OAuth 登录」填写 Client ID / Client Secret，并点击“保存并应用参数”。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 20)
             }
@@ -229,12 +259,12 @@ struct QuotaView: View {
 
             HStack(spacing: 10) {
                 if needsOAuthSetup {
-                    Button("打开 OAuth 配置") {
-                        openTeamOAuthConfigFile()
+                    Button("去设置") {
+                        appState.selectedTab = .settings
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("已配置，重新登录") {
+                    Button("已保存，去登录") {
                         authViewModel.login()
                     }
                     .buttonStyle(.bordered)
@@ -260,39 +290,12 @@ struct QuotaView: View {
         return message.contains("invalid_client") || message.contains("客户端配置无效")
     }
 
-    private func openTeamOAuthConfigFile() {
-        let configURL = OAuthConstants.teamSharedCredentialFileURL
-        let configDirectory = configURL.deletingLastPathComponent()
-        let fm = FileManager.default
-
-        if !fm.fileExists(atPath: configDirectory.path) {
-            try? fm.createDirectory(at: configDirectory, withIntermediateDirectories: true)
-        }
-
-        if !fm.fileExists(atPath: configURL.path) {
-            let template = "{\n  \"client_id\": \"\",\n  \"client_secret\": \"\"\n}\n"
-            try? template.data(using: .utf8)?.write(to: configURL, options: .atomic)
-        }
-
-        if !NSWorkspace.shared.open(configURL) {
-            NSWorkspace.shared.activateFileViewerSelecting([configURL])
-        }
-    }
-
     private var accountSelector: some View {
         HStack(spacing: 12) {
             Text("当前账户")
                 .frame(width: 100, alignment: .leading)
 
-            Picker("", selection: Binding(
-                get: { authViewModel.activeAccountId ?? "" },
-                set: { newId in
-                    if !newId.isEmpty {
-                        authViewModel.switchActiveAccount(to: newId)
-                        quotaViewModel.selectAccount(newId)
-                    }
-                }
-            )) {
+            Picker("", selection: $selectedAccountPickerId) {
                 Text("未选择账户").tag("")
                 ForEach(authViewModel.accounts) { account in
                     Text(account.email).tag(account.id)
@@ -354,17 +357,7 @@ struct QuotaView: View {
 
                 Spacer()
 
-                Toggle(quotaViewModel.isPolling ? "停止自动刷新" : "开启自动刷新", isOn: Binding(
-                    get: { quotaViewModel.isPolling },
-                    set: { enabled in
-                        if enabled {
-                            let interval = max(5, appState.settingsDraft.quotaPollingIntervalSeconds)
-                            quotaViewModel.startPolling(intervalSeconds: TimeInterval(interval))
-                        } else {
-                            quotaViewModel.stopPolling()
-                        }
-                    }
-                ))
+                Toggle(quotaViewModel.isPolling ? "停止自动刷新" : "开启自动刷新", isOn: $pollingToggle)
                 .toggleStyle(.button)
                 .disabled(authViewModel.accounts.isEmpty)
             }

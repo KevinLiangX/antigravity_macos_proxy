@@ -106,6 +106,10 @@ struct SettingsView: View {
                         Text("说明：若同时设置了环境变量 AG_GOOGLE_CLIENT_ID / AG_GOOGLE_CLIENT_SECRET，环境变量优先。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        Text("点击底部“保存并应用参数”后会持久化到本地设置文件，后续可直接登录。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(20)
                     .background(Color.gray.opacity(0.06))

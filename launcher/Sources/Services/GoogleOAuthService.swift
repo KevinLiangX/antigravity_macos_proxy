@@ -19,7 +19,7 @@ extension GoogleOAuthError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingClientCredential:
-            return "缺少有效的 Google OAuth 凭据。请在设置页填写 Client ID / Client Secret，或设置环境变量 AG_GOOGLE_CLIENT_ID / AG_GOOGLE_CLIENT_SECRET，或在 \(OAuthConstants.teamSharedCredentialFilePath) 内置团队凭据。"
+            return "缺少有效的 Google OAuth 凭据。请在设置页填写并保存 Client ID / Client Secret，或设置环境变量 AG_GOOGLE_CLIENT_ID / AG_GOOGLE_CLIENT_SECRET。"
         case .invalidClientCredential(let detail):
             if detail.isEmpty {
                 return "Google OAuth 客户端配置无效（invalid_client）。请检查 Client ID / Client Secret 是否正确。"

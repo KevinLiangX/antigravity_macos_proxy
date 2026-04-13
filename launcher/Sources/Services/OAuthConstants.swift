@@ -31,16 +31,6 @@ enum OAuthConstants {
             return saved
         }
 
-        let user = userHomeCredential().id
-        if !user.isEmpty {
-            return user
-        }
-
-        let bundled = bundledCredential().id
-        if !bundled.isEmpty {
-            return bundled
-        }
-
         return placeholderClientID
     }
 
@@ -55,29 +45,11 @@ enum OAuthConstants {
             return saved
         }
 
-        let user = userHomeCredential().secret
-        if !user.isEmpty {
-            return user
-        }
-
-        let bundled = bundledCredential().secret
-        if !bundled.isEmpty {
-            return bundled
-        }
-
         return placeholderClientSecret
     }
 
     static var hasValidClientCredential: Bool {
         isValid(clientID) && isValid(clientSecret)
-    }
-
-    static var teamSharedCredentialFileURL: URL {
-        FileSystemPaths.launcherRoot.appendingPathComponent("Resources/google_oauth_client.json")
-    }
-
-    static var teamSharedCredentialFilePath: String {
-        teamSharedCredentialFileURL.path
     }
 
     private static func isValid(_ raw: String) -> Bool {
@@ -103,72 +75,5 @@ enum OAuthConstants {
             settings.googleOAuthClientID.trimmingCharacters(in: .whitespacesAndNewlines),
             settings.googleOAuthClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-    }
-
-    private static func bundledCredential() -> (id: String, secret: String) {
-        for candidate in bundledCredentialCandidates() {
-            guard let data = try? Data(contentsOf: candidate),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                continue
-            }
-
-            let id = (json["client_id"] as? String ?? json["clientID"] as? String ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let secret = (json["client_secret"] as? String ?? json["clientSecret"] as? String ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if !id.isEmpty || !secret.isEmpty {
-                return (id, secret)
-            }
-        }
-
-        return ("", "")
-    }
-
-    private static func bundledCredentialCandidates() -> [URL] {
-        var candidates: [URL] = []
-
-        if let url = Bundle.main.url(forResource: "google_oauth_client", withExtension: "json") {
-            candidates.append(url)
-        }
-
-#if SWIFT_PACKAGE
-        if let url = Bundle.module.url(forResource: "google_oauth_client", withExtension: "json") {
-            candidates.append(url)
-        }
-#endif
-
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-        candidates.append(cwd.appendingPathComponent("Resources/google_oauth_client.json"))
-        candidates.append(cwd.appendingPathComponent("launcher/Resources/google_oauth_client.json"))
-
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // Services
-            .deletingLastPathComponent() // Sources
-            .deletingLastPathComponent() // launcher
-
-        candidates.append(repoRoot.appendingPathComponent("launcher/Resources/google_oauth_client.json"))
-        candidates.append(repoRoot.appendingPathComponent("Resources/google_oauth_client.json"))
-
-        var seen = Set<String>()
-        return candidates.filter { seen.insert($0.path).inserted }
-    }
-
-    // Read credential from user config directory (not tracked by git)
-    private static func userHomeCredential() -> (id: String, secret: String) {
-        let url = FileSystemPaths.userConfigRoot.appendingPathComponent("google_oauth_client.json")
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return ("", "")
-        }
-
-        guard let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return ("", "")
-        }
-
-        let id = (json["client_id"] as? String ?? json["clientID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let secret = (json["client_secret"] as? String ?? json["clientSecret"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return (id, secret)
     }
 }

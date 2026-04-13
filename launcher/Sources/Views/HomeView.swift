@@ -2,37 +2,45 @@ import AppKit
 import SwiftUI
 
 struct HomeView: View {
+    @EnvironmentObject private var appState: LauncherAppState
+
     var body: some View {
-        TabView {
+        TabView(selection: $appState.selectedTab) {
             OverviewView()
                 .tabItem {
                     Label("总览", systemImage: "gauge.with.needle")
                 }
+                .tag(LauncherTab.overview)
 
             ConfigView()
                 .tabItem {
                     Label("配置", systemImage: "slider.horizontal.3")
                 }
+                .tag(LauncherTab.config)
 
             QuotaView()
                 .tabItem {
                     Label("配额", systemImage: "chart.bar.doc.horizontal")
                 }
+                .tag(LauncherTab.quota)
 
             DiagnosticsView()
                 .tabItem {
                     Label("诊断", systemImage: "stethoscope")
                 }
+                .tag(LauncherTab.diagnostics)
 
             RuntimeLogsView()
                 .tabItem {
                     Label("运行日志", systemImage: "text.alignleft")
                 }
+                .tag(LauncherTab.runtimeLogs)
 
             SettingsView()
                 .tabItem {
                     Label("设置", systemImage: "gearshape")
                 }
+                .tag(LauncherTab.settings)
         }
     }
 }

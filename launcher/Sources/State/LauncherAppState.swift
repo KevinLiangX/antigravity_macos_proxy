@@ -1,7 +1,17 @@
 import Foundation
 
+enum LauncherTab: Hashable {
+    case overview
+    case config
+    case quota
+    case diagnostics
+    case runtimeLogs
+    case settings
+}
+
 @MainActor
 final class LauncherAppState: ObservableObject {
+    @Published var selectedTab: LauncherTab = .overview
     @Published var status: AppStatus = .targetAppMissing
     @Published var appInfo: AppInfo?
     @Published var workflowItems: [LaunchWorkflowItem] = LaunchWorkflowStep.allCases.map {
