@@ -19,9 +19,6 @@ enum OAuthConstants {
 
     private static let placeholderClientID = "YOUR_GOOGLE_CLIENT_ID_HERE"
     private static let placeholderClientSecret = "YOUR_GOOGLE_CLIENT_SECRET_HERE"
-    // Shared fallback credentials aligned with AntigravityQuotaWatcherDesktop.
-    private static let sharedDefaultClientID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-    private static let sharedDefaultClientSecret = "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"
 
     static var clientID: String {
         let env = ProcessInfo.processInfo.environment["AG_GOOGLE_CLIENT_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -34,12 +31,17 @@ enum OAuthConstants {
             return saved
         }
 
+        let user = userHomeCredential().id
+        if !user.isEmpty {
+            return user
+        }
+
         let bundled = bundledCredential().id
         if !bundled.isEmpty {
             return bundled
         }
 
-        return sharedDefaultClientID
+        return placeholderClientID
     }
 
     static var clientSecret: String {
@@ -53,12 +55,17 @@ enum OAuthConstants {
             return saved
         }
 
+        let user = userHomeCredential().secret
+        if !user.isEmpty {
+            return user
+        }
+
         let bundled = bundledCredential().secret
         if !bundled.isEmpty {
             return bundled
         }
 
-        return sharedDefaultClientSecret
+        return placeholderClientSecret
     }
 
     static var hasValidClientCredential: Bool {
@@ -145,5 +152,23 @@ enum OAuthConstants {
 
         var seen = Set<String>()
         return candidates.filter { seen.insert($0.path).inserted }
+    }
+
+    // Read credential from user config directory (not tracked by git)
+    private static func userHomeCredential() -> (id: String, secret: String) {
+        let url = FileSystemPaths.userConfigRoot.appendingPathComponent("google_oauth_client.json")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return ("", "")
+        }
+
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ("", "")
+        }
+
+        let id = (json["client_id"] as? String ?? json["clientID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = (json["client_secret"] as? String ?? json["clientSecret"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return (id, secret)
     }
 }
