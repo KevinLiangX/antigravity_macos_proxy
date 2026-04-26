@@ -74,10 +74,8 @@ final class QuotaViewModel: ObservableObject {
         guard let snapshot, !snapshot.models.isEmpty else {
             return nil
         }
-        let now = Date()
         let nearestReset = snapshot.models
             .compactMap { $0.resetTime }
-            .filter { $0.timeIntervalSince(now) > -300 }
             .min()
         guard let reset = nearestReset else { return nil }
         let formatter = DateFormatter()

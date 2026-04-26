@@ -16,6 +16,9 @@ final class LaunchService {
 
     func launchPatchedApp(settings: AppSettings? = nil) async throws {
         stopManagedPatchedApp()
+        
+        // 启动前自动清理隔离属性，避免 Gatekeeper 拦截
+        try? clearQuarantineAttributes()
 
         let dylibPath = FileSystemPaths.patchedApp
             .appendingPathComponent("Contents/Resources/libAntigravityTun.dylib")
@@ -25,10 +28,14 @@ final class LaunchService {
             .path
 
         let config = NSWorkspace.OpenConfiguration()
-        config.arguments = ["--use-mock-keychain", "--password-store=basic"]
+        let activeApp = FileSystemPaths.activeApp
+        config.arguments = activeApp.launchArguments
+        
         var env = ProcessInfo.processInfo.environment
-        env["ELECTRON_NO_UPDATER"] = "1"
-        env["SUDisableAutomaticChecks"] = "YES"
+        for (key, value) in activeApp.environmentVariables {
+            env[key] = value
+        }
+        
         env["DYLD_INSERT_LIBRARIES"] = dylibPath
         env["ANTIGRAVITY_CONFIG"] = configPath
         
@@ -55,6 +62,23 @@ final class LaunchService {
             configuration: config
         )
         self.activeAppPID = app.processIdentifier
+    }
+    
+    /// 清理应用的隔离属性，避免每次启动都需要输入密码
+    private func clearQuarantineAttributes() throws {
+        let appPath = FileSystemPaths.patchedApp.path
+        
+        // 清理主要隔离属性
+        _ = try? CommandRunner.run("/usr/bin/xattr", ["-d", "com.apple.quarantine", appPath])
+        _ = try? CommandRunner.run("/usr/bin/xattr", ["-cr", appPath])
+        
+        // 针对 Gemini，额外清理可执行文件
+        if FileSystemPaths.activeApp == .gemini {
+            let executablePath = FileSystemPaths.patchedApp
+                .appendingPathComponent("Contents/MacOS/Gemini").path
+            _ = try? CommandRunner.run("/usr/bin/xattr", ["-cr", executablePath])
+            _ = try? CommandRunner.run("/bin/chmod", ["+x", executablePath])
+        }
     }
 
     func launchOriginalApp() async throws {

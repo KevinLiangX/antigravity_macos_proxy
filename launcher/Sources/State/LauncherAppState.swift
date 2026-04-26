@@ -38,6 +38,22 @@ final class LauncherAppState: ObservableObject {
     @Published var releaseUpdateInfo: ReleaseUpdateInfo?
     @Published var releaseUpdateStatusMessage: String?
     @Published var releaseUpdateErrorMessage: String?
+    
+    @Published var selectedApp: TargetApp = .antigravity {
+        didSet {
+            UserDefaults.standard.set(selectedApp.rawValue, forKey: "SelectedTargetApp")
+            FileSystemPaths.activeApp = selectedApp
+            refresh()
+        }
+    }
+
+    init() {
+        if let saved = UserDefaults.standard.string(forKey: "SelectedTargetApp"),
+           let app = TargetApp(rawValue: saved) {
+            self.selectedApp = app
+            FileSystemPaths.activeApp = app
+        }
+    }
 
     private var hasLoadedProxyConfig = false
     private var lastReleaseCheckAt: Date?
@@ -72,7 +88,11 @@ final class LauncherAppState: ObservableObject {
             let registry = active.registry
             compatibilitySourceText = active.source
             if let meta = compatibilityService.readCacheMetadata() {
-                compatibilityMetaText = "更新于 \(meta.updatedAt.formatted())，规则数 \(meta.ruleCount)"
+                let formatter = DateFormatter()
+                formatter.dateStyle = .medium
+                formatter.timeStyle = .short
+                let dateStr = formatter.string(from: meta.updatedAt)
+                compatibilityMetaText = "更新于 \(dateStr)，规则数 \(meta.ruleCount)"
             } else {
                 compatibilityMetaText = nil
             }
@@ -496,9 +516,9 @@ final class LauncherAppState: ObservableObject {
         do {
             markStep(.detect, as: .running)
             guard let app = appDetectionService.detectInstalledTargetApp() else {
-                markStep(.detect, as: .failed, detail: "未找到 /Applications/Antigravity.app")
+                markStep(.detect, as: .failed, detail: "未找到 \(selectedApp.defaultPath)")
                 status = .targetAppMissing
-                appendLog("失败: 未检测到原版应用")
+                appendLog("失败: 未检测到原版应用 (\(selectedApp.displayName))")
                 isRunningWorkflow = false
                 return
             }

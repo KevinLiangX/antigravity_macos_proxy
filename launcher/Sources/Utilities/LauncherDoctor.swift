@@ -19,7 +19,7 @@ struct LauncherDoctor {
         guard let app = detection.detectInstalledTargetApp() else {
             let failure = LauncherFailure(code: .targetAppMissing, message: "未检测到原版 App")
             print("错误: \(failure.formatted)")
-            print("建议: 确保 /Applications/Antigravity.app 存在")
+            print("建议: 确保 \(FileSystemPaths.targetApp.path) 存在")
             return failure.codeValue
         }
 

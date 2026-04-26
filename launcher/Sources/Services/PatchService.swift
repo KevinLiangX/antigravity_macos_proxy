@@ -12,7 +12,7 @@ extension PatchServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .targetAppMissing:
-            return "未找到 /Applications/Antigravity.app"
+            return "未找到 \(FileSystemPaths.targetApp.path)"
         case .copyFailed:
             return "复制目标 App 失败"
         case .runtimeAssetMissing(let name):
@@ -77,6 +77,16 @@ final class PatchService {
             try signingService.preflight()
             report("执行 inside-out 重签名", onProgress: onProgress)
             try resignBundle(onProgress: onProgress)
+            
+            // 修复完成后自动清理隔离属性，避免 Gatekeeper 提示
+            report("清理修复包隔离属性 (xattr)", onProgress: onProgress)
+            try clearExtendedAttributesAfterSigning()
+            
+            // 针对 Gemini 应用，额外处理钥匙串访问权限
+            if FileSystemPaths.activeApp == .gemini {
+                report("配置 Gemini 特殊权限", onProgress: onProgress)
+                try configureGeminiSpecialPermissions()
+            }
         } catch {
             report("检测到失败，执行自动回滚", onProgress: onProgress)
             do {
@@ -157,6 +167,65 @@ final class PatchService {
             "/usr/bin/xattr",
             ["-cr", FileSystemPaths.patchedApp.path]
         )
+    }
+    
+    /// 签名后清理隔离属性，确保修复后的应用不会被 Gatekeeper 拦截
+    private func clearExtendedAttributesAfterSigning() throws {
+        let appPath = FileSystemPaths.patchedApp.path
+        
+        // 清理整个应用包的隔离属性
+        _ = try? CommandRunner.run("/usr/bin/xattr", ["-cr", appPath])
+        
+        // 额外清理常见的问题属性
+        let attributesToRemove = [
+            "com.apple.quarantine",
+            "com.apple.metadata:kMDItemWhereFroms",
+            "com.apple.downloadedDate"
+        ]
+        
+        for attr in attributesToRemove {
+            _ = try? CommandRunner.run("/usr/bin/xattr", ["-d", attr, appPath])
+        }
+        
+        // 递归清理应用包内的所有文件
+        if let enumerator = FileManager.default.enumerator(at: FileSystemPaths.patchedApp, includingPropertiesForKeys: nil) {
+            for case let url as URL in enumerator {
+                _ = try? CommandRunner.run("/usr/bin/xattr", ["-cr", url.path])
+            }
+        }
+    }
+    
+    /// 配置 Gemini 应用的特殊权限
+    private func configureGeminiSpecialPermissions() throws {
+        let appPath = FileSystemPaths.patchedApp.path
+        let bundleID = FileSystemPaths.activeApp.bundleIdentifier
+        
+        // 1. 重置 TCC 权限数据库中的旧记录，避免冲突
+        _ = try? CommandRunner.run("/usr/bin/tccutil", ["reset", "All", bundleID])
+        _ = try? CommandRunner.run("/usr/bin/tccutil", ["reset", "All", "com.google.GeminiMacOS"])
+        
+        // 2. 针对钥匙串访问权限，清理旧的钥匙串条目
+        // 注意：这需要用户首次启动时输入密码，但之后就不会再提示
+        let keychainIdentities = [
+            "Gemini",
+            "com.google.GeminiMacOS",
+            "Gemini_Unlocked"
+        ]
+        
+        for identity in keychainIdentities {
+            // 尝试删除可能冲突的钥匙串条目
+            _ = try? CommandRunner.run(
+                "/usr/bin/security",
+                ["delete-generic-password", "-s", identity, "-a", identity]
+            )
+        }
+        
+        // 3. 设置应用包权限，确保有执行权限
+        _ = try? CommandRunner.run("/bin/chmod", ["-R", "+x", appPath])
+        
+        // 4. 清理 LaunchServices 缓存，确保系统识别新的签名
+        _ = try? CommandRunner.run("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", 
+                                     ["-f", "-r", appPath])
     }
 
     private func resolveDylibSource() throws -> URL {

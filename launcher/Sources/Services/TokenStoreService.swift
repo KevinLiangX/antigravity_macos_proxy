@@ -4,6 +4,7 @@ enum TokenStoreError: Error {
     case encodeFailed
     case decodeFailed
     case fileSystemError(Error)
+    case keychainError(Error)
     case tokenExpired
 }
 
@@ -16,6 +17,8 @@ extension TokenStoreError: LocalizedError {
             return "Failed to decode OAuth token."
         case .fileSystemError(let error):
             return "File system error: \(error.localizedDescription)"
+        case .keychainError(let error):
+            return "Keychain error: \(error.localizedDescription)"
         case .tokenExpired:
             return "Token has expired."
         }
@@ -30,11 +33,43 @@ struct TokenStoreService {
     init() {
         self.tokensDirectory = FileSystemPaths.appSupportRoot.appendingPathComponent("oauth_tokens")
         
-        // 确保目录存在
+        // Ensure directory exists (for migration and backward compatibility if needed)
         try? FileManager.default.createDirectory(
             at: tokensDirectory,
             withIntermediateDirectories: true
         )
+        
+        // Migrate any existing tokens from disk to Keychain
+        migrateFromDiskToKeychain()
+    }
+
+    private func migrateFromDiskToKeychain() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: tokensDirectory, includingPropertiesForKeys: nil) else {
+            return
+        }
+        
+        for fileURL in files where fileURL.pathExtension == "json" {
+            let accountId = fileURL.deletingPathExtension().lastPathComponent
+            do {
+                let data = try Data(contentsOf: fileURL)
+                // Attempt to decode to ensure it's a valid token
+                _ = try decoder.decode(OAuthToken.self, from: data)
+                
+                // Save to Keychain
+                try KeychainService.save(key: keychainKey(for: accountId), data: data)
+                
+                // Delete the file after successful migration
+                try fm.removeItem(at: fileURL)
+                print("Migrated token for \(accountId) to Keychain.")
+            } catch {
+                print("Failed to migrate token for \(accountId): \(error)")
+            }
+        }
+    }
+
+    private func keychainKey(for accountId: String) -> String {
+        return "oauth_token_\(accountId)"
     }
 
     func saveToken(_ token: OAuthToken, for accountId: String, allowUserInteraction: Bool = true) throws {
@@ -45,30 +80,18 @@ struct TokenStoreService {
             throw TokenStoreError.encodeFailed
         }
 
-        let tokenFileURL = tokensDirectory.appendingPathComponent("\(accountId).json")
-        
         do {
-            try payload.write(to: tokenFileURL, options: .atomic)
+            try KeychainService.save(key: keychainKey(for: accountId), data: payload)
         } catch {
-            throw TokenStoreError.fileSystemError(error)
+            throw TokenStoreError.keychainError(error)
         }
     }
 
     func loadToken(for accountId: String, allowUserInteraction: Bool = true) throws -> OAuthToken? {
-        let tokenFileURL = tokensDirectory.appendingPathComponent("\(accountId).json")
-        
-        guard FileManager.default.fileExists(atPath: tokenFileURL.path) else {
-            return nil
-        }
-        
-        let data: Data
         do {
-            data = try Data(contentsOf: tokenFileURL)
-        } catch {
-            throw TokenStoreError.fileSystemError(error)
-        }
-        
-        do {
+            guard let data = try KeychainService.load(key: keychainKey(for: accountId)) else {
+                return nil
+            }
             return try decoder.decode(OAuthToken.self, from: data)
         } catch {
             throw TokenStoreError.decodeFailed
@@ -84,29 +107,24 @@ struct TokenStoreService {
     }
 
     func deleteToken(for accountId: String) throws {
-        let tokenFileURL = tokensDirectory.appendingPathComponent("\(accountId).json")
-        
-        if FileManager.default.fileExists(atPath: tokenFileURL.path) {
-            do {
-                try FileManager.default.removeItem(at: tokenFileURL)
-            } catch {
-                throw TokenStoreError.fileSystemError(error)
-            }
+        do {
+            try KeychainService.delete(key: keychainKey(for: accountId))
+        } catch {
+            throw TokenStoreError.keychainError(error)
         }
     }
 
     func clearAllTokens() throws {
         do {
-            let fileURLs = try FileManager.default.contentsOfDirectory(
-                at: tokensDirectory,
-                includingPropertiesForKeys: nil
-            )
+            try KeychainService.deleteAll()
             
-            for fileURL in fileURLs {
+            // Also clean up the directory if anything was left
+            let files = try FileManager.default.contentsOfDirectory(at: tokensDirectory, includingPropertiesForKeys: nil)
+            for fileURL in files {
                 try FileManager.default.removeItem(at: fileURL)
             }
         } catch {
-            throw TokenStoreError.fileSystemError(error)
+            throw TokenStoreError.keychainError(error)
         }
     }
 }

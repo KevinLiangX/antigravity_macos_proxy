@@ -58,30 +58,51 @@ enum FileSystemPaths {
             .appendingPathComponent("antigravity_macos_proxy", isDirectory: true)
     }
 
-    static let targetApp = URL(fileURLWithPath: "/Applications/Antigravity.app")
-    static let patchedApp = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Applications/Antigravity_Unlocked.app", isDirectory: true)
+    static var activeApp: TargetApp = .antigravity
 
-    static let appSupportRoot = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/AntigravityProxy", isDirectory: true)
+    static var targetApp: URL {
+        URL(fileURLWithPath: activeApp.defaultPath)
+    }
 
-    static let settingsFile = appSupportRoot
-        .appendingPathComponent("settings.json")
+    static var patchedApp: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications/\(activeApp.patchedName)", isDirectory: true)
+    }
 
-    static let compatibilityRegistryCacheFile = appSupportRoot
-        .appendingPathComponent("compatibility.registry.json")
+    static var appSupportRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/AntigravityProxy/\(activeApp.id)", isDirectory: true)
+    }
 
-    static let compatibilityRegistryCacheMetaFile = appSupportRoot
-        .appendingPathComponent("compatibility.registry.meta.json")
+    static var settingsFile: URL {
+        appSupportRoot.appendingPathComponent("settings.json")
+    }
 
-    static let metadataRoot = appSupportRoot
-        .appendingPathComponent("metadata", isDirectory: true)
+    static var compatibilityRegistryCacheFile: URL {
+        appSupportRoot.appendingPathComponent("compatibility.registry.json")
+    }
 
-    static let userConfigRoot = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity", isDirectory: true)
+    static var compatibilityRegistryCacheMetaFile: URL {
+        appSupportRoot.appendingPathComponent("compatibility.registry.meta.json")
+    }
 
-    static let userProxyConfigFile = userConfigRoot
-        .appendingPathComponent("proxy_config.json")
+    static var metadataRoot: URL {
+        appSupportRoot.appendingPathComponent("metadata", isDirectory: true)
+    }
+
+    static var userConfigRoot: URL {
+        switch activeApp {
+        case .antigravity:
+            return FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/Antigravity", isDirectory: true)
+        case .gemini:
+            return appSupportRoot.appendingPathComponent("Config", isDirectory: true)
+        }
+    }
+
+    static var userProxyConfigFile: URL {
+        userConfigRoot.appendingPathComponent("proxy_config.json")
+    }
 
     static let diagnosticsRoot = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/AntigravityProxyLauncher", isDirectory: true)
@@ -89,11 +110,13 @@ enum FileSystemPaths {
     static let patchLogFile = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/AntigravityProxy/patch.log")
 
-    static let runtimeLogsRoot = appSupportRoot
-        .appendingPathComponent("runtime_logs", isDirectory: true)
+    static var runtimeLogsRoot: URL {
+        appSupportRoot.appendingPathComponent("runtime_logs", isDirectory: true)
+    }
 
-    static let runtimeLogFile = runtimeLogsRoot
-        .appendingPathComponent("antigravity_proxy.log")
+    static var runtimeLogFile: URL {
+        runtimeLogsRoot.appendingPathComponent("antigravity_proxy.log")
+    }
 
     static var requiredRuntimeDirectories: [URL] {
         [

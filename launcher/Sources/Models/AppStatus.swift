@@ -34,7 +34,7 @@ enum AppStatus: Equatable {
     var description: String {
         switch self {
         case .targetAppMissing:
-            return "请先安装 /Applications/Antigravity.app"
+            return "请先安装 \(FileSystemPaths.targetApp.path)"
         case .targetAppUnsupportedVersion(let version):
             return "当前版本 \(version) 不在兼容列表中。"
         case .targetAppInstalled:

@@ -132,9 +132,22 @@ private struct OverviewView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Antigravity Proxy Launcher")
-                .font(.largeTitle)
-                .bold()
+            HStack {
+                Text("Antigravity Proxy Launcher")
+                    .font(.largeTitle)
+                    .bold()
+                
+                Spacer()
+                
+                Picker("", selection: $appState.selectedApp) {
+                    ForEach(TargetApp.allCases) { app in
+                        Text(app.displayName).tag(app)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+                .disabled(appState.isRunningWorkflow)
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {

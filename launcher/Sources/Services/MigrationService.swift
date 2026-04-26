@@ -2,6 +2,10 @@ import Foundation
 
 struct MigrationService {
     func migrateSandboxData() throws {
+        guard FileSystemPaths.activeApp == .antigravity else {
+            return
+        }
+        
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
         let destination = home.appendingPathComponent("Library/Application Support/Antigravity")
@@ -53,7 +57,10 @@ struct MigrationService {
             "Antigravity",
             "com.google.antigravity",
             "com.apple.antigravity",
-            "Antigravity_Unlocked"
+            "Antigravity_Unlocked",
+            "Gemini",
+            "com.google.GeminiMacOS",
+            "Gemini_Unlocked"
         ]
 
         for identity in identities {

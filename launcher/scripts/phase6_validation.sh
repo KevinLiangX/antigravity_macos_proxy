@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
-APP_SUPPORT_DIR="$HOME/Library/Application Support/AntigravityProxy"
+APP_SUPPORT_DIR="$HOME/Library/Application Support/AntigravityProxy/antigravity"
 CACHE_FILE="$APP_SUPPORT_DIR/compatibility.registry.json"
 CACHE_META_FILE="$APP_SUPPORT_DIR/compatibility.registry.meta.json"
 TMP_DIR="$(mktemp -d /tmp/phase6_validation.XXXXXX)"

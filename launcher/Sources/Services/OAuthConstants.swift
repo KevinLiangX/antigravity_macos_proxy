@@ -19,6 +19,8 @@ enum OAuthConstants {
 
     private static let placeholderClientID = "YOUR_GOOGLE_CLIENT_ID_HERE"
     private static let placeholderClientSecret = "YOUR_GOOGLE_CLIENT_SECRET_HERE"
+    // WARNING: Fallback credentials are for development convenience only.
+    // In production, these should be provided via environment variables or encrypted config.
     private static let fallbackClientID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
     private static let fallbackClientSecret = "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"
     private static let bundledCredential = loadBundledCredential()
